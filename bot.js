@@ -6,8 +6,8 @@ const TOKEN = process.env.BOT_TOKEN;
 
 // ✅ QUI INSERISCI I CHAT ID
 const USERS = [
-  123456789,  // 👈 tuo chat id
-  987654321   // 👈 chat id amici
+  137255954,  // 👈 tuo chat id
+  123456789   // 👈 chat id amici
 ];
 
 // =============================
