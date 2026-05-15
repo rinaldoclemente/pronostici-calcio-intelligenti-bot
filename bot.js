@@ -1,4 +1,6 @@
-import fs from "fs";import fs from " TOKEN = process.env.BOT_TOKEN;
+import fs from "fs";
+
+const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 
 // =============================
