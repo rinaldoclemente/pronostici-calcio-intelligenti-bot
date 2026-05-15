@@ -1,11 +1,6 @@
-// =============================
-// 🤖 TELEGRAM TIPSTER BOT
-// =============================
-
 import fs from "fs";
 
 const TOKEN = process.env.BOT_TOKEN;
-
 const USERS_FILE = "users.json";
 
 // =============================
@@ -15,7 +10,6 @@ function loadUsers() {
   try {
     return JSON.parse(fs.readFileSync(USERS_FILE));
   } catch {
-    console.log("⚠️ Nessun users.json trovato");
     return [];
   }
 }
@@ -28,28 +22,21 @@ async function sendToAll(text) {
   const users = loadUsers();
 
   if (users.length === 0) {
-    console.log("❌ Nessun utente nel file users.json");
+    console.log("❌ Nessun utente");
     return;
   }
 
-  for (const chatId of users) {
-    try {
-      await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text
-        })
-      });
-
-      console.log("✅ Inviato a:", chatId);
-
-    } catch (err) {
-      console.log("❌ Errore invio a:", chatId);
-    }
+  for (const id of users) {
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chat_id: id,
+        text
+      })
+    });
   }
 }
 
@@ -80,10 +67,9 @@ function poisson(lambda, k) {
 // ✅ STATISTICHE
 // =============================
 function getStats(team, matches) {
-
   const games = matches.filter(m => m.home === team || m.away === team);
 
-  if (games.length === 0) return { gf: 1.2, ga: 1.2 };
+  if (games.length === 0) return { gf: 1.3, ga: 1.3 };
 
   const gf = games.reduce((s, m) =>
     s + (m.home === team ? m.hg : m.ag), 0) / games.length;
@@ -95,21 +81,17 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO PRONOSTICI
+// ✅ CALCOLO INTELLIGENTE
 // =============================
 function calculate(lambdaH, lambdaA) {
 
   let pH = 0, pD = 0, pA = 0;
   let over25 = 0, under35 = 0, btts = 0;
 
-  let scores = [];
-
-  for (let i = 0; i <= 4; i++) {
-    for (let j = 0; j <= 4; j++) {
+  for (let i = 0; i <= 5; i++) {
+    for (let j = 0; j <= 5; j++) {
 
       const p = poisson(lambdaH, i) * poisson(lambdaA, j);
-
-      scores.push({ score: `${i}-${j}`, p });
 
       if (i > j) pH += p;
       else if (i === j) pD += p;
@@ -121,25 +103,20 @@ function calculate(lambdaH, lambdaA) {
     }
   }
 
-  scores.sort((a, b) => b.p - a.p);
-
-  const bets = [
-    { label: "1", pct: pH },
-    { label: "X", pct: pD },
-    { label: "2", pct: pA },
+  let bets = [
     { label: "1X", pct: pH + pD },
     { label: "X2", pct: pD + pA },
     { label: "OVER 2.5", pct: over25 },
-    { label: "UNDER 3.5", pct: under35 },
-    { label: "BTTS SÌ", pct: btts }
+    { label: "BTTS", pct: btts },
+    { label: "UNDER 3.5", pct: under35 }
   ];
+
+  // ✅ filtro pronostici troppo facili (no value)
+  bets = bets.filter(b => b.pct < 0.80);
 
   bets.sort((a, b) => b.pct - a.pct);
 
-  return {
-    bets: bets.slice(0, 2),
-    scores: scores.slice(0, 2)
-  };
+  return bets.slice(0, 2);
 }
 
 // =============================
@@ -147,7 +124,7 @@ function calculate(lambdaH, lambdaA) {
 // =============================
 async function loadData() {
 
-  let allMatches = [];
+  let matches = [];
 
   for (const lg of LEAGUES) {
 
@@ -178,47 +155,52 @@ async function loadData() {
       const lambdaH = (h.gf + a.ga) / 2;
       const lambdaA = (a.gf + h.ga) / 2;
 
-      const res = calculate(lambdaH, lambdaA);
+      const bets = calculate(lambdaH, lambdaA);
 
-      allMatches.push({
-        league: lg.name,
-        home: m.HomeTeam,
-        away: m.AwayTeam,
-        ...res
-      });
+      if (bets.length >= 2) {
+        matches.push({
+          league: lg.name,
+          home: m.HomeTeam,
+          away: m.AwayTeam,
+          bets
+        });
+      }
     });
   }
 
-  return allMatches;
+  return matches;
 }
 
 // =============================
-// ✅ MESSAGGIO TIPSTER
+// ✅ ICONE TIPSTER
+// =============================
+function icon(pct) {
+  if (pct >= 0.72) return "✅";   // sicuro
+  if (pct >= 0.60) return "⚖️"; // equilibrato
+  return "🔥";                  // value
+}
+
+// =============================
+// ✅ MESSAGGIO PRO
 // =============================
 function buildMessage(matches) {
-
-  function icon(pct) {
-    if (pct >= 0.65) return "✅";
-    if (pct >= 0.55) return "🔥";
-    return "⚖️";
-  }
 
   matches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
 
   const top10 = matches.slice(0, 10);
 
-  let msg = "🔥 TOP 10 PRONOSTICI\n\n";
+  let msg = "🔥 TOP 10 VALUE PICKS 🔥\n\n";
 
   top10.forEach((m, i) => {
-    msg += `${i + 1}) ${m.home} - ${m.away}\n`;
-    msg += `${icon(m.bets[0].pct)} ${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%)\n`;
-    msg += `${icon(m.bets[1].pct)} ${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
+    msg += `${i + 1}️⃣ ${m.home} - ${m.away}\n`;
+    msg += `${icon(m.bets[0].pct)} ${m.bets[0].label}\n`;
+    msg += `${icon(m.bets[1].pct)} ${m.bets[1].label}\n\n`;
   });
 
-  msg += "------------------------\n";
+  msg += "━━━━━━━━━━━━━━━\n";
 
+  // ✅ raggruppamento campionati
   const leaguesMap = {};
-
   matches.forEach(m => {
     if (!leaguesMap[m.league]) leaguesMap[m.league] = [];
     leaguesMap[m.league].push(m);
@@ -231,22 +213,20 @@ function buildMessage(matches) {
     leaguesMap[lg].forEach(m => {
 
       const short1 = m.bets[0].label
-        .replace("OVER 2.5", "O2.5")
-        .replace("UNDER 3.5", "U3.5")
-        .replace("BTTS SÌ", "BTS");
+        .replace("OVER 2.5","O2.5")
+        .replace("UNDER 3.5","U3.5");
 
       const short2 = m.bets[1].label
-        .replace("OVER 2.5", "O2.5")
-        .replace("UNDER 3.5", "U3.5")
-        .replace("BTTS SÌ", "BTS");
+        .replace("OVER 2.5","O2.5")
+        .replace("UNDER 3.5","U3.5");
 
       msg += `${m.home}-${m.away} → ${short1} | ${short2}\n`;
     });
   }
 
-  if (msg.length > 3500) {
-    msg = msg.substring(0, 3500);
-  }
+  msg += "\n━━━━━━━━━━━━━━━\n";
+  msg += "🎯 Strategia: mix tra safe e value picks\n";
+  msg += "⚠️ Modello Poisson";
 
   return msg;
 }
@@ -255,8 +235,6 @@ function buildMessage(matches) {
 // ✅ MAIN
 // =============================
 async function run() {
-
-  console.log("🚀 BOT PARTITO");
 
   const data = await loadData();
 
@@ -271,4 +249,3 @@ async function run() {
 }
 
 run();
-``
