@@ -86,8 +86,13 @@ function getStats(team, matches) {
 function calculate(lambdaH, lambdaA) {
 
   let pH = 0, pD = 0, pA = 0;
-  let over25 = 0, under35 = 0, btts = 0;
+  let over15 = 0, over25 = 0;
+  let under25 = 0, under35 = 0;
+  let btts = 0;
 
+  // =============================
+  // ✅ DISTRIBUZIONE
+  // =============================
   for (let i = 0; i <= 5; i++) {
     for (let j = 0; j <= 5; j++) {
 
@@ -97,23 +102,79 @@ function calculate(lambdaH, lambdaA) {
       else if (i === j) pD += p;
       else pA += p;
 
+      if (i + j > 1) over15 += p;
       if (i + j > 2) over25 += p;
+
+      if (i + j < 3) under25 += p;
       if (i + j < 4) under35 += p;
+
       if (i > 0 && j > 0) btts += p;
     }
   }
 
-  let bets = [
-    { label: "1X", pct: pH + pD },
-    { label: "X2", pct: pD + pA },
-    { label: "OVER 2.5", pct: over25 },
-    { label: "BTTS", pct: btts },
-    { label: "UNDER 3.5", pct: under35 }
-  ];
+  // =============================
+  // ✅ MERCATI BASE
+  // =============================
+  const base = {
+    "1": pH,
+    "X": pD,
+    "2": pA,
+    "1X": pH + pD,
+    "X2": pD + pA,
+    "O1.5": over15,
+    "O2.5": over25,
+    "U2.5": under25,
+    "U3.5": under35,
+    "BTTS": btts
+  };
 
-  // ✅ filtro pronostici troppo facili (no value)
-  bets = bets.filter(b => b.pct < 0.80);
+  let bets = [];
 
+  // =============================
+  // ✅ AGGIUNGI SINGOLI
+  // =============================
+  Object.entries(base).forEach(([label, pct]) => {
+    bets.push({ label, pct });
+  });
+
+  // =============================
+  // ✅ COMBO DINAMICHE
+  // =============================
+  const keys = Object.keys(base);
+
+  for (let i = 0; i < keys.length; i++) {
+    for (let j = i + 1; j < keys.length; j++) {
+
+      const k1 = keys[i];
+      const k2 = keys[j];
+
+      const p1 = base[k1];
+      const p2 = base[k2];
+
+      // ✅ evitiamo combo inutili
+      if (Math.abs(p1 - p2) < 0.05) continue;
+
+      // ✅ calcolo probabilità combinata
+      const comboProb = p1 * p2;
+
+      bets.push({
+        label: `${k1} + ${k2}`,
+        pct: comboProb
+      });
+    }
+  }
+
+  // =============================
+  // ✅ FILTRO INTELLIGENTE
+  // =============================
+  bets = bets.filter(b =>
+    b.pct > 0.40 &&   // troppo basse via
+    b.pct < 0.78      // troppo sicure via
+  );
+
+  // =============================
+  // ✅ ORDINAMENTO
+  // =============================
   bets.sort((a, b) => b.pct - a.pct);
 
   return bets.slice(0, 2);
