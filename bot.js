@@ -1,6 +1,4 @@
-import fs from "fs";
-
-const TOKEN = process.env.BOT_TOKEN;
+import fs from "fs";import fs from " TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 
 // =============================
@@ -18,13 +16,7 @@ function loadUsers() {
 // ✅ INVIO A TUTTI
 // =============================
 async function sendToAll(text) {
-
   const users = loadUsers();
-
-  if (users.length === 0) {
-    console.log("❌ Nessun utente");
-    return;
-  }
 
   for (const id of users) {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -64,7 +56,7 @@ function poisson(lambda, k) {
 }
 
 // =============================
-// ✅ STATISTICHE
+// ✅ STATS
 // =============================
 function getStats(team, matches) {
   const games = matches.filter(m => m.home === team || m.away === team);
@@ -81,7 +73,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO INTELLIGENTE
+// ✅ CALCOLO COMPLETO (3 PICKS)
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -90,9 +82,6 @@ function calculate(lambdaH, lambdaA) {
   let under25 = 0, under35 = 0;
   let btts = 0;
 
-  // =============================
-  // ✅ DISTRIBUZIONE
-  // =============================
   for (let i = 0; i <= 5; i++) {
     for (let j = 0; j <= 5; j++) {
 
@@ -104,7 +93,6 @@ function calculate(lambdaH, lambdaA) {
 
       if (i + j > 1) over15 += p;
       if (i + j > 2) over25 += p;
-
       if (i + j < 3) under25 += p;
       if (i + j < 4) under35 += p;
 
@@ -112,9 +100,6 @@ function calculate(lambdaH, lambdaA) {
     }
   }
 
-  // =============================
-  // ✅ MERCATI BASE
-  // =============================
   const base = {
     "1": pH,
     "X": pD,
@@ -130,54 +115,49 @@ function calculate(lambdaH, lambdaA) {
 
   let bets = [];
 
-  // =============================
-  // ✅ AGGIUNGI SINGOLI
-  // =============================
+  // ✅ singoli
   Object.entries(base).forEach(([label, pct]) => {
     bets.push({ label, pct });
   });
 
-  // =============================
-  // ✅ COMBO DINAMICHE
-  // =============================
+  // ✅ combo dinamiche
   const keys = Object.keys(base);
-
   for (let i = 0; i < keys.length; i++) {
     for (let j = i + 1; j < keys.length; j++) {
 
-      const k1 = keys[i];
-      const k2 = keys[j];
-
-      const p1 = base[k1];
-      const p2 = base[k2];
-
-      // ✅ evitiamo combo inutili
-      if (Math.abs(p1 - p2) < 0.05) continue;
-
-      // ✅ calcolo probabilità combinata
-      const comboProb = p1 * p2;
+      const comboProb = base[keys[i]] * base[keys[j]];
 
       bets.push({
-        label: `${k1} + ${k2}`,
+        label: `${keys[i]} + ${keys[j]}`,
         pct: comboProb
       });
     }
   }
 
-  // =============================
-  // ✅ FILTRO INTELLIGENTE
-  // =============================
-  bets = bets.filter(b =>
-    b.pct > 0.40 &&   // troppo basse via
-    b.pct < 0.78      // troppo sicure via
-  );
+  // ✅ filtro qualità
+  bets = bets.filter(b => b.pct > 0.40 && b.pct < 0.85);
 
-  // =============================
-  // ✅ ORDINAMENTO
-  // =============================
   bets.sort((a, b) => b.pct - a.pct);
 
-  return bets.slice(0, 2);
+  // =============================
+  // ✅ PRENDE 3 LIVELLI
+  // =============================
+  let safe = bets.find(b => b.pct >= 0.70);
+  let mid  = bets.find(b => b.pct < 0.70 && b.pct >= 0.55);
+  let risk = bets.find(b => b.pct < 0.55);
+
+  let result = [];
+
+  if (safe) result.push(safe);
+  if (mid) result.push(mid);
+  if (risk) result.push(risk);
+
+  // fallback
+  for (let i = 0; i < bets.length && result.length < 3; i++) {
+    if (!result.includes(bets[i])) result.push(bets[i]);
+  }
+
+  return result.slice(0, 3);
 }
 
 // =============================
@@ -218,7 +198,7 @@ async function loadData() {
 
       const bets = calculate(lambdaH, lambdaA);
 
-      if (bets.length >= 2) {
+      if (bets.length === 3) {
         matches.push({
           league: lg.name,
           home: m.HomeTeam,
@@ -233,16 +213,7 @@ async function loadData() {
 }
 
 // =============================
-// ✅ ICONE TIPSTER
-// =============================
-function icon(pct) {
-  if (pct >= 0.72) return "✅";   // sicuro
-  if (pct >= 0.60) return "⚖️"; // equilibrato
-  return "🔥";                  // value
-}
-
-// =============================
-// ✅ MESSAGGIO PRO
+// ✅ MESSAGGIO
 // =============================
 function buildMessage(matches) {
 
@@ -254,13 +225,13 @@ function buildMessage(matches) {
 
   top10.forEach((m, i) => {
     msg += `${i + 1}️⃣ ${m.home} - ${m.away}\n`;
-    msg += `${icon(m.bets[0].pct)} ${m.bets[0].label}\n`;
-    msg += `${icon(m.bets[1].pct)} ${m.bets[1].label}\n\n`;
+    msg += `✅ ${m.bets[0].label}\n`;
+    msg += `⚖️ ${m.bets[1].label}\n`;
+    msg += `🔥 ${m.bets[2].label}\n\n`;
   });
 
   msg += "━━━━━━━━━━━━━━━\n";
 
-  // ✅ raggruppamento campionati
   const leaguesMap = {};
   matches.forEach(m => {
     if (!leaguesMap[m.league]) leaguesMap[m.league] = [];
@@ -272,22 +243,12 @@ function buildMessage(matches) {
     msg += `\n📊 ${lg}\n\n`;
 
     leaguesMap[lg].forEach(m => {
-
-      const short1 = m.bets[0].label
-        .replace("OVER 2.5","O2.5")
-        .replace("UNDER 3.5","U3.5");
-
-      const short2 = m.bets[1].label
-        .replace("OVER 2.5","O2.5")
-        .replace("UNDER 3.5","U3.5");
-
-      msg += `${m.home}-${m.away} → ${short1} | ${short2}\n`;
+      msg += `${m.home}-${m.away} → ${m.bets[0].label} | ${m.bets[1].label} | ${m.bets[2].label}\n`;
     });
   }
 
   msg += "\n━━━━━━━━━━━━━━━\n";
-  msg += "🎯 Strategia: mix tra safe e value picks\n";
-  msg += "⚠️ Modello Poisson";
+  msg += "🎯 Strategia: mix tra safe, equilibrati e value\n";
 
   return msg;
 }
@@ -297,16 +258,17 @@ function buildMessage(matches) {
 // =============================
 async function run() {
 
-  const data = await loadData();
+  const matches = await loadData();
 
-  if (data.length === 0) {
+  if (matches.length === 0) {
     await sendToAll("⚠️ Nessuna partita trovata");
     return;
   }
 
-  const message = buildMessage(data);
+  const msg = buildMessage(matches);
 
-  await sendToAll(message);
+  await sendToAll(msg);
 }
 
 run();
+
