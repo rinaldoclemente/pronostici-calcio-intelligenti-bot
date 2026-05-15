@@ -4,14 +4,14 @@
 
 const TOKEN = process.env.BOT_TOKEN;
 
-// ✅ QUI INSERISCI I CHAT ID
+// ✅ INSERISCI QUI I CHAT ID
 const USERS = [
-  137255954,  // 👈 tuo chat id
-  123456789   // 👈 chat id amici
+  123456789,  // 👈 tuo chat id
+  987654321   // 👈 amici
 ];
 
 // =============================
-// ✅ INVIO MESSAGGIO A TUTTI
+// ✅ INVIO A TUTTI
 // =============================
 async function sendToAll(text) {
 
@@ -37,7 +37,7 @@ async function sendToAll(text) {
 }
 
 // =============================
-// ✅ DATI CAMPIONATI
+// ✅ CAMPIONATI
 // =============================
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
@@ -60,7 +60,7 @@ function poisson(lambda, k) {
 }
 
 // =============================
-// ✅ STATISTICHE
+// ✅ STATS
 // =============================
 function getStats(team, matches) {
 
@@ -78,12 +78,12 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO PRONOSTICI
+// ✅ CALCOLO
 // =============================
 function calculate(lambdaH, lambdaA) {
 
   let pH = 0, pD = 0, pA = 0;
-  let over25 = 0;
+  let over25 = 0, under35 = 0, btts = 0;
 
   let scores = [];
 
@@ -99,15 +99,22 @@ function calculate(lambdaH, lambdaA) {
       else pA += p;
 
       if (i + j > 2) over25 += p;
+      if (i + j < 4) under35 += p;
+      if (i > 0 && j > 0) btts += p;
     }
   }
 
   scores.sort((a, b) => b.p - a.p);
 
   const bets = [
+    { label: "1", pct: pH },
+    { label: "X", pct: pD },
+    { label: "2", pct: pA },
     { label: "1X", pct: pH + pD },
     { label: "X2", pct: pD + pA },
-    { label: "OVER 2.5", pct: over25 }
+    { label: "OVER 2.5", pct: over25 },
+    { label: "UNDER 3.5", pct: under35 },
+    { label: "BTTS SÌ", pct: btts }
   ];
 
   bets.sort((a, b) => b.pct - a.pct);
@@ -119,7 +126,7 @@ function calculate(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ CARICA DATI
+// ✅ LOAD DATI
 // =============================
 async function loadData() {
 
@@ -157,6 +164,7 @@ async function loadData() {
       const res = calculate(lambdaH, lambdaA);
 
       allMatches.push({
+        league: lg.name,
         home: m.HomeTeam,
         away: m.AwayTeam,
         ...res
@@ -168,27 +176,57 @@ async function loadData() {
 }
 
 // =============================
-// ✅ COSTRUZIONE MESSAGGIO
+// ✅ MESSAGGIO TIPSTER
 // =============================
 function buildMessage(matches) {
 
-  matches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
+  function icon(pct) {
+    if (pct >= 0.65) return "✅";
+    if (pct >= 0.55) return "🔥";
+    return "⚖️";
+  }
 
+  // 🔥 TOP 10
+  matches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
   const top10 = matches.slice(0, 10);
 
-  let msg = "🔥🔥 TOP 10 PRONOSTICI 🔥🔥\n\n";
+  let msg = "🔥 TOP 10 PRONOSTICI\n\n";
 
   top10.forEach((m, i) => {
     msg += `${i + 1}) ${m.home} - ${m.away}\n`;
-    msg += `${m.bets[0].label} - ${m.bets[1].label}\n\n`;
+    msg += `${icon(m.bets[0].pct)} ${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%)\n`;
+    msg += `${icon(m.bets[1].pct)} ${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
   });
 
-  msg += "📊 Altre partite\n\n";
+  msg += "------------------------\n";
 
-  matches.slice(0, 15).forEach(m => {
-    msg += `${m.home} - ${m.away}\n`;
-    msg += `${m.bets[0].label} / ${m.bets[1].label}\n\n`;
+  // 📊 COMPATTO PER CAMPIONATO
+  const leaguesMap = {};
+
+  matches.forEach(m => {
+    if (!leaguesMap[m.league]) leaguesMap[m.league] = [];
+    leaguesMap[m.league].push(m);
   });
+
+  for (const lg in leaguesMap) {
+
+    msg += `\n📊 ${lg}\n\n`;
+
+    leaguesMap[lg].forEach(m => {
+
+      const short1 = m.bets[0].label
+        .replace("OVER 2.5", "O2.5")
+        .replace("UNDER 3.5", "U3.5")
+        .replace("BTTS SÌ", "BTS");
+
+      const short2 = m.bets[1].label
+        .replace("OVER 2.5", "O2.5")
+        .replace("UNDER 3.5", "U3.5")
+        .replace("BTTS SÌ", "BTS");
+
+      msg += `${m.home}-${m.away} → ${short1} | ${short2}\n`;
+    });
+  }
 
   // limite telegram
   if (msg.length > 3500) {
@@ -218,4 +256,3 @@ async function run() {
 }
 
 run();
-``
