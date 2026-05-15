@@ -1,3 +1,7 @@
+// =============================
+// 🤖 TELEGRAM TIPSTER BOT PRO
+// =============================
+
 const TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 
@@ -8,19 +12,29 @@ const LEAGUES = [
   { name: "PREMIER LEAGUE", slug: "epl-2025" }
 ];
 
-// ✅ funzione invio
+// =============================
+// ✅ INVIO MESSAGGIO
+// =============================
 async function sendMessage(text) {
-  await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: CHAT_ID,
-      text
-    })
-  });
+  try {
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text
+      })
+    });
+  } catch (err) {
+    console.error("Errore invio:", err);
+  }
 }
 
-// ✅ stats squadra
+// =============================
+// ✅ STATISTICHE SQUADRA
+// =============================
 function getStats(team, matches) {
   const games = matches.filter(m => m.home === team || m.away === team);
 
@@ -35,22 +49,28 @@ function getStats(team, matches) {
   return { gf, ga };
 }
 
-// ✅ poisson
+// =============================
+// ✅ POISSON
+// =============================
 function poisson(lambda, k) {
   let fact = 1;
   for (let i = 2; i <= k; i++) fact *= i;
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / fact;
 }
 
-// ✅ calcolo probabilità
+// =============================
+// ✅ CALCOLO PRONOSTICI
+// =============================
 function calculateBets(lambdaH, lambdaA) {
+
   let pH = 0, pD = 0, pA = 0;
-  let over25 = 0, under35 = 0;
+  let over25 = 0, under35 = 0, btts = 0;
 
   let scores = [];
 
   for (let i = 0; i <= 5; i++) {
     for (let j = 0; j <= 5; j++) {
+
       const p = poisson(lambdaH, i) * poisson(lambdaA, j);
 
       scores.push({ score: `${i}-${j}`, p });
@@ -61,6 +81,7 @@ function calculateBets(lambdaH, lambdaA) {
 
       if (i + j > 2) over25 += p;
       if (i + j < 4) under35 += p;
+      if (i > 0 && j > 0) btts += p;
     }
   }
 
@@ -73,7 +94,8 @@ function calculateBets(lambdaH, lambdaA) {
     { label: "1X", pct: pH + pD },
     { label: "X2", pct: pD + pA },
     { label: "OVER 2.5", pct: over25 },
-    { label: "UNDER 3.5", pct: under35 }
+    { label: "UNDER 3.5", pct: under35 },
+    { label: "BTTS SÌ", pct: btts }
   ];
 
   bets.sort((a, b) => b.pct - a.pct);
@@ -84,58 +106,84 @@ function calculateBets(lambdaH, lambdaA) {
   };
 }
 
-// ✅ load dati
+// =============================
+// ✅ CARICAMENTO DATI
+// =============================
 async function loadData() {
+
   let matchesByLeague = {};
 
   for (const lg of LEAGUES) {
-    const res = await fetch(BASE_URL + lg.slug);
-    const json = await res.json();
 
-    const played = [];
-    const upcoming = [];
+    try {
 
-    json.forEach(r => {
-      const finished = r.HomeTeamScore !== null && r.AwayTeamScore !== null;
+      const res = await fetch(BASE_URL + lg.slug);
+      const json = await res.json();
 
-      const m = {
-        home: r.HomeTeam,
-        away: r.AwayTeam,
-        hg: r.HomeTeamScore,
-        ag: r.AwayTeamScore
-      };
+      const played = [];
+      const upcoming = [];
 
-      if (finished) played.push(m);
-      else upcoming.push(m);
-    });
+      json.forEach(r => {
+        const finished = r.HomeTeamScore !== null && r.AwayTeamScore !== null;
 
-    let matches = [];
+        const m = {
+          home: r.HomeTeam,
+          away: r.AwayTeam,
+          hg: r.HomeTeamScore,
+          ag: r.AwayTeamScore
+        };
 
-    upcoming.slice(0, 10).forEach(m => {
-      const h = getStats(m.home, played);
-      const a = getStats(m.away, played);
-
-      const lambdaH = (h.gf + a.ga) / 2;
-      const lambdaA = (a.gf + h.ga) / 2;
-
-      const res = calculateBets(lambdaH, lambdaA);
-
-      matches.push({
-        home: m.home,
-        away: m.away,
-        bets: res.topBets,
-        scores: res.scores
+        if (finished) played.push(m);
+        else upcoming.push(m);
       });
-    });
 
-    matchesByLeague[lg.name] = matches;
+      let matches = [];
+
+      upcoming.slice(0, 10).forEach(m => {
+
+        const h = getStats(m.home, played);
+        const a = getStats(m.away, played);
+
+        const lambdaH = (h.gf + a.ga) / 2;
+        const lambdaA = (a.gf + h.ga) / 2;
+
+        const res = calculateBets(lambdaH, lambdaA);
+
+        matches.push({
+          home: m.home,
+          away: m.away,
+          bets: res.topBets,
+          scores: res.scores
+        });
+
+      });
+
+      matchesByLeague[lg.name] = matches;
+
+    } catch {
+      console.log("Errore su lega:", lg.name);
+    }
   }
 
   return matchesByLeague;
 }
 
+// =============================
+// ✅ ICONE TIPSTER
+// =============================
+function icon(pct) {
+  if (pct >= 0.65) return "✅";
+  if (pct >= 0.55) return "🔥";
+  return "⚖️";
+}
+
+// =============================
 // ✅ MAIN
+// =============================
 async function run() {
+
+  console.log("🚀 BOT AVVIATO");
+
   const data = await loadData();
 
   let allMatches = [];
@@ -149,31 +197,48 @@ async function run() {
     return;
   }
 
-  // ✅ TOP 10
+  // =============================
+  // 🔥 TOP 10
+  // =============================
+
   allMatches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
 
   const top10 = allMatches.slice(0, 10);
 
-  let message = "🔥 TOP 10 PRONOSTICI\n\n";
+  let message = "🔥🔥 TOP 10 VALUE PICKS 🔥🔥\n\n";
 
-  top10.forEach(m => {
-    message += `${m.home} - ${m.away}\n`;
-    message += `${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%) - `;
-    message += `${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
+  top10.forEach((m, i) => {
+    message += `${i + 1}) ${m.home} - ${m.away}\n`;
+    message += `${icon(m.bets[0].pct)} ${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%)\n`;
+    message += `${icon(m.bets[1].pct)} ${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
   });
 
-  // ✅ PARTITE PER CAMPIONATO
+  message += "----------------------------------\n\n";
+
+  // =============================
+  // 📊 CAMPIONATI
+  // =============================
+
   for (const lg in data) {
-    message += `\n📊 ${lg}\n\n`;
+
+    message += `📊 ${lg}\n\n`;
 
     data[lg].forEach(m => {
-      message += `${m.home} - ${m.away}\n`;
-      message += `${m.bets[0].label} - ${m.bets[1].label}\n`;
-      message += `${m.scores[0].score} - ${m.scores[1].score}\n\n`;
+      message += `🔸 ${m.home} - ${m.away}\n`;
+      message += `👉 ${m.bets[0].label} | ${m.bets[1].label}\n`;
+      message += `🎯 ${m.scores[0].score} / ${m.scores[1].score}\n\n`;
     });
+
+    message += "----------------------------------\n\n";
   }
 
-  // ✅ limite telegram
+  // =============================
+  // ⚠️ FOOTER
+  // =============================
+  message += "⚠️ Modello Poisson\n";
+  message += "📈 Solo a scopo informativo";
+
+  // Telegram limit
   if (message.length > 3500) {
     message = message.substring(0, 3500);
   }
