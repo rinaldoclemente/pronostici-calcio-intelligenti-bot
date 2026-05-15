@@ -2,20 +2,37 @@
 // 🤖 TELEGRAM TIPSTER BOT
 // =============================
 
+import fs from "fs";
+
 const TOKEN = process.env.BOT_TOKEN;
 
-// ✅ INSERISCI QUI I CHAT ID
-const USERS = [
-  123456789,  // 👈 tuo chat id
-  987654321   // 👈 amici
-];
+const USERS_FILE = "users.json";
+
+// =============================
+// ✅ CARICA UTENTI
+// =============================
+function loadUsers() {
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE));
+  } catch {
+    console.log("⚠️ Nessun users.json trovato");
+    return [];
+  }
+}
 
 // =============================
 // ✅ INVIO A TUTTI
 // =============================
 async function sendToAll(text) {
 
-  for (const chatId of USERS) {
+  const users = loadUsers();
+
+  if (users.length === 0) {
+    console.log("❌ Nessun utente nel file users.json");
+    return;
+  }
+
+  for (const chatId of users) {
     try {
       await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
         method: "POST",
@@ -60,7 +77,7 @@ function poisson(lambda, k) {
 }
 
 // =============================
-// ✅ STATS
+// ✅ STATISTICHE
 // =============================
 function getStats(team, matches) {
 
@@ -78,7 +95,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO
+// ✅ CALCOLO PRONOSTICI
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -186,8 +203,8 @@ function buildMessage(matches) {
     return "⚖️";
   }
 
-  // 🔥 TOP 10
   matches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
+
   const top10 = matches.slice(0, 10);
 
   let msg = "🔥 TOP 10 PRONOSTICI\n\n";
@@ -200,7 +217,6 @@ function buildMessage(matches) {
 
   msg += "------------------------\n";
 
-  // 📊 COMPATTO PER CAMPIONATO
   const leaguesMap = {};
 
   matches.forEach(m => {
@@ -228,7 +244,6 @@ function buildMessage(matches) {
     });
   }
 
-  // limite telegram
   if (msg.length > 3500) {
     msg = msg.substring(0, 3500);
   }
@@ -256,3 +271,4 @@ async function run() {
 }
 
 run();
+``
