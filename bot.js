@@ -4,7 +4,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 
 // =============================
-// ✅ CARICA UTENTI
+// ✅ UTENTI
 // =============================
 function loadUsers() {
   try {
@@ -14,18 +14,13 @@ function loadUsers() {
   }
 }
 
-// =============================
-// ✅ INVIO A TUTTI
-// =============================
 async function sendToAll(text) {
   const users = loadUsers();
 
   for (const id of users) {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: id,
         text
@@ -75,7 +70,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO COMPLETO (3 PICKS)
+// ✅ CALCOLO INTELLIGENTE
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -95,6 +90,7 @@ function calculate(lambdaH, lambdaA) {
 
       if (i + j > 1) over15 += p;
       if (i + j > 2) over25 += p;
+
       if (i + j < 3) under25 += p;
       if (i + j < 4) under35 += p;
 
@@ -117,33 +113,47 @@ function calculate(lambdaH, lambdaA) {
 
   let bets = [];
 
-  // ✅ singoli
+  // ✅ SINGLE
   Object.entries(base).forEach(([label, pct]) => {
     bets.push({ label, pct });
   });
 
-  // ✅ combo dinamiche
-  const keys = Object.keys(base);
-  for (let i = 0; i < keys.length; i++) {
-    for (let j = i + 1; j < keys.length; j++) {
+  // ✅ COMBO CORRETTE
 
-      const comboProb = base[keys[i]] * base[keys[j]];
-
+  // 1X2 + Over/Under
+  ["1","X","2"].forEach(r => {
+    ["O1.5","O2.5","U2.5","U3.5"].forEach(t => {
       bets.push({
-        label: `${keys[i]} + ${keys[j]}`,
-        pct: comboProb
+        label: `${r} + ${t}`,
+        pct: base[r] * base[t]
       });
-    }
-  }
+    });
+  });
+
+  // Double chance + Over/Under
+  ["1X","X2"].forEach(dc => {
+    ["O1.5","O2.5","U2.5","U3.5"].forEach(t => {
+      bets.push({
+        label: `${dc} + ${t}`,
+        pct: base[dc] * base[t]
+      });
+    });
+  });
+
+  // BTTS + Over
+  ["O1.5","O2.5"].forEach(t => {
+    bets.push({
+      label: `BTTS + ${t}`,
+      pct: base["BTTS"] * base[t]
+    });
+  });
 
   // ✅ filtro qualità
   bets = bets.filter(b => b.pct > 0.40 && b.pct < 0.85);
 
   bets.sort((a, b) => b.pct - a.pct);
 
-  // =============================
-  // ✅ PRENDE 3 LIVELLI
-  // =============================
+  // ✅ 3 livelli
   let safe = bets.find(b => b.pct >= 0.70);
   let mid  = bets.find(b => b.pct < 0.70 && b.pct >= 0.55);
   let risk = bets.find(b => b.pct < 0.55);
@@ -154,7 +164,6 @@ function calculate(lambdaH, lambdaA) {
   if (mid) result.push(mid);
   if (risk) result.push(risk);
 
-  // fallback
   for (let i = 0; i < bets.length && result.length < 3; i++) {
     if (!result.includes(bets[i])) result.push(bets[i]);
   }
@@ -200,14 +209,12 @@ async function loadData() {
 
       const bets = calculate(lambdaH, lambdaA);
 
-      if (bets.length === 3) {
-        matches.push({
-          league: lg.name,
-          home: m.HomeTeam,
-          away: m.AwayTeam,
-          bets
-        });
-      }
+      matches.push({
+        league: lg.name,
+        home: m.HomeTeam,
+        away: m.AwayTeam,
+        bets
+      });
     });
   }
 
@@ -215,7 +222,7 @@ async function loadData() {
 }
 
 // =============================
-// ✅ MESSAGGIO
+// ✅ MESSAGGIO TIPSTER
 // =============================
 function buildMessage(matches) {
 
@@ -225,8 +232,9 @@ function buildMessage(matches) {
 
   let msg = "🔥 TOP 10 VALUE PICKS 🔥\n\n";
 
-  top10.forEach((m, i) => {
-    msg += `${i + 1}️⃣ ${m.home} - ${m.away}\n`;
+  // ✅ NO NUMERI
+  top10.forEach(m => {
+    msg += `${m.home} - ${m.away}\n`;
     msg += `✅ ${m.bets[0].label}\n`;
     msg += `⚖️ ${m.bets[1].label}\n`;
     msg += `🔥 ${m.bets[2].label}\n\n`;
@@ -245,12 +253,17 @@ function buildMessage(matches) {
     msg += `\n📊 ${lg}\n\n`;
 
     leaguesMap[lg].forEach(m => {
-      msg += `${m.home}-${m.away} → ${m.bets[0].label} | ${m.bets[1].label} | ${m.bets[2].label}\n`;
+      msg += `${m.home}-${m.away} → `;
+      msg += `${m.bets[0].label} | ${m.bets[1].label} | ${m.bets[2].label}\n`;
     });
   }
 
   msg += "\n━━━━━━━━━━━━━━━\n";
   msg += "🎯 Strategia: mix tra safe, equilibrati e value\n";
+
+  if (msg.length > 3500) {
+    msg = msg.substring(0, 3500);
+  }
 
   return msg;
 }
@@ -273,4 +286,3 @@ async function run() {
 }
 
 run();
-
