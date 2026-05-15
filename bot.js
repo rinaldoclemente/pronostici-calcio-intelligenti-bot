@@ -1,147 +1,221 @@
-import fs from "fs";
+// =============================
+// 🤖 TELEGRAM TIPSTER BOT
+// =============================
 
 const TOKEN = process.env.BOT_TOKEN;
-const CHAT_ID = process.env.CHAT_ID;
 
-const USERS_FILE = "users.json";
-
-// =============================
-// ✅ USERS
-// =============================
-function loadUsers() {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE));
-  } catch {
-    return [];
-  }
-}
-
-function saveUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-}
-
-function addUser(id) {
-  const users = loadUsers();
-
-  if (!users.includes(id)) {
-    users.push(id);
-    saveUsers(users);
-    console.log("✅ Nuovo utente:", id);
-  }
-}
+// ✅ QUI INSERISCI I CHAT ID
+const USERS = [
+  123456789,  // 👈 tuo chat id
+  987654321   // 👈 chat id amici
+];
 
 // =============================
-// ✅ SEND
-// =============================
-async function sendMessage(chatId, text) {
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text
-      })
-    });
-
-    const data = await res.json();
-    console.log("Telegram:", data);
-
-  } catch (err) {
-    console.log("Errore invio:", err);
-  }
-}
-
-// =============================
-// ✅ INVIO A TUTTI + FALLBACK
+// ✅ INVIO MESSAGGIO A TUTTI
 // =============================
 async function sendToAll(text) {
 
-  let users = loadUsers();
+  for (const chatId of USERS) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text
+        })
+      });
 
-  console.log("Utenti trovati:", users);
+      console.log("✅ Inviato a:", chatId);
 
-  // ✅ manda a tutti
-  if (users.length > 0) {
-    for (const id of users) {
-      await sendMessage(id, text);
+    } catch (err) {
+      console.log("❌ Errore invio a:", chatId);
+    }
+  }
+}
+
+// =============================
+// ✅ DATI CAMPIONATI
+// =============================
+const BASE_URL = "https://fixturedownload.com/feed/json/";
+
+const LEAGUES = [
+  { name: "SERIE A", slug: "serie-a-2025" },
+  { name: "PREMIER LEAGUE", slug: "epl-2025" },
+  { name: "BUNDESLIGA", slug: "bundesliga-2025" },
+  { name: "LA LIGA", slug: "la-liga-2025" },
+  { name: "LIGUE 1", slug: "ligue-1-2025" },
+  { name: "EREDIVISIE", slug: "eredivisie-2025" }
+];
+
+// =============================
+// ✅ POISSON
+// =============================
+function poisson(lambda, k) {
+  let fact = 1;
+  for (let i = 2; i <= k; i++) fact *= i;
+  return (Math.pow(lambda, k) * Math.exp(-lambda)) / fact;
+}
+
+// =============================
+// ✅ STATISTICHE
+// =============================
+function getStats(team, matches) {
+
+  const games = matches.filter(m => m.home === team || m.away === team);
+
+  if (games.length === 0) return { gf: 1.2, ga: 1.2 };
+
+  const gf = games.reduce((s, m) =>
+    s + (m.home === team ? m.hg : m.ag), 0) / games.length;
+
+  const ga = games.reduce((s, m) =>
+    s + (m.home === team ? m.ag : m.hg), 0) / games.length;
+
+  return { gf, ga };
+}
+
+// =============================
+// ✅ CALCOLO PRONOSTICI
+// =============================
+function calculate(lambdaH, lambdaA) {
+
+  let pH = 0, pD = 0, pA = 0;
+  let over25 = 0;
+
+  let scores = [];
+
+  for (let i = 0; i <= 4; i++) {
+    for (let j = 0; j <= 4; j++) {
+
+      const p = poisson(lambdaH, i) * poisson(lambdaA, j);
+
+      scores.push({ score: `${i}-${j}`, p });
+
+      if (i > j) pH += p;
+      else if (i === j) pD += p;
+      else pA += p;
+
+      if (i + j > 2) over25 += p;
     }
   }
 
-  // ✅ fallback (sempre a te)
-  await sendMessage(CHAT_ID, text);
+  scores.sort((a, b) => b.p - a.p);
+
+  const bets = [
+    { label: "1X", pct: pH + pD },
+    { label: "X2", pct: pD + pA },
+    { label: "OVER 2.5", pct: over25 }
+  ];
+
+  bets.sort((a, b) => b.pct - a.pct);
+
+  return {
+    bets: bets.slice(0, 2),
+    scores: scores.slice(0, 2)
+  };
 }
 
 // =============================
-// ✅ WELCOME
+// ✅ CARICA DATI
 // =============================
-function welcomeText() {
-  return `
-👋 Benvenuto!
+async function loadData() {
 
-🔥 I TOP 10 sono i migliori pronostici tra TUTTI i campionati.
+  let allMatches = [];
 
-📩 Ogni venerdì alle 16 riceverai i pronostici.
-`;
-}
+  for (const lg of LEAGUES) {
 
-// =============================
-// ✅ HANDLE
-// =============================
-async function handleUpdate(update) {
+    const res = await fetch(BASE_URL + lg.slug);
+    const json = await res.json();
 
-  if (!update.message) return;
+    const played = [];
+    const upcoming = [];
 
-  const chatId = update.message.chat.id;
-  const text = update.message.text;
+    json.forEach(r => {
+      if (r.HomeTeamScore !== null) {
+        played.push({
+          home: r.HomeTeam,
+          away: r.AwayTeam,
+          hg: r.HomeTeamScore,
+          ag: r.AwayTeamScore
+        });
+      } else {
+        upcoming.push(r);
+      }
+    });
 
-  if (text === "/start") {
+    upcoming.slice(0, 5).forEach(m => {
 
-    addUser(chatId);
+      const h = getStats(m.HomeTeam, played);
+      const a = getStats(m.AwayTeam, played);
 
-    await sendMessage(chatId, welcomeText());
+      const lambdaH = (h.gf + a.ga) / 2;
+      const lambdaA = (a.gf + h.ga) / 2;
+
+      const res = calculate(lambdaH, lambdaA);
+
+      allMatches.push({
+        home: m.HomeTeam,
+        away: m.AwayTeam,
+        ...res
+      });
+    });
   }
+
+  return allMatches;
 }
 
 // =============================
-// ✅ LISTENER (solo locale)
+// ✅ COSTRUZIONE MESSAGGIO
 // =============================
-async function listen() {
-  let offset = 0;
+function buildMessage(matches) {
 
-  while (true) {
+  matches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
 
-    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}`);
-    const data = await res.json();
+  const top10 = matches.slice(0, 10);
 
-    for (const update of data.result) {
-      offset = update.update_id + 1;
-      await handleUpdate(update);
-    }
+  let msg = "🔥🔥 TOP 10 PRONOSTICI 🔥🔥\n\n";
 
-    await new Promise(r => setTimeout(r, 2000));
+  top10.forEach((m, i) => {
+    msg += `${i + 1}) ${m.home} - ${m.away}\n`;
+    msg += `${m.bets[0].label} - ${m.bets[1].label}\n\n`;
+  });
+
+  msg += "📊 Altre partite\n\n";
+
+  matches.slice(0, 15).forEach(m => {
+    msg += `${m.home} - ${m.away}\n`;
+    msg += `${m.bets[0].label} / ${m.bets[1].label}\n\n`;
+  });
+
+  // limite telegram
+  if (msg.length > 3500) {
+    msg = msg.substring(0, 3500);
   }
+
+  return msg;
 }
 
 // =============================
-// ✅ RUN (cron)
+// ✅ MAIN
 // =============================
 async function run() {
 
-  const message = "🔥 TEST BOT FUNZIONANTE";
+  console.log("🚀 BOT PARTITO");
 
-  console.log("Invio messaggio...");
+  const data = await loadData();
+
+  if (data.length === 0) {
+    await sendToAll("⚠️ Nessuna partita trovata");
+    return;
+  }
+
+  const message = buildMessage(data);
 
   await sendToAll(message);
 }
 
-// =============================
-// ✅ AVVIO
-// =============================
-if (process.env.RUN_LISTENER === "true") {
-  listen();
-} else {
-  run();
-}
+run();
+``
