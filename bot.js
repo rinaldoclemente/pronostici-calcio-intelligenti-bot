@@ -7,33 +7,81 @@ const CHAT_ID = process.env.CHAT_ID;
 
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
+// ✅ TUTTI I CAMPIONATI
 const LEAGUES = [
   { name: "SERIE A", slug: "serie-a-2025" },
-  { name: "PREMIER LEAGUE", slug: "epl-2025" }
+  { name: "PREMIER LEAGUE", slug: "epl-2025" },
+  { name: "BUNDESLIGA", slug: "bundesliga-2025" },
+  { name: "LA LIGA", slug: "la-liga-2025" },
+  { name: "LIGUE 1", slug: "ligue-1-2025" },
+  { name: "EREDIVISIE", slug: "eredivisie-2025" }
 ];
 
 // =============================
 // ✅ INVIO MESSAGGIO
 // =============================
-async function sendMessage(text) {
-  try {
-    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: CHAT_ID,
-        text
-      })
-    });
-  } catch (err) {
-    console.error("Errore invio:", err);
-  }
+async function sendMessage(chatId, text, keyboard = null) {
+  await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      reply_markup: keyboard
+    })
+  });
 }
 
 // =============================
-// ✅ STATISTICHE SQUADRA
+// ✅ MENU
+// =============================
+function buildMenu() {
+  return {
+    keyboard: [
+      ["🔥 Solo TOP 10"],
+      ["🇮🇹 Serie A", "🏴 Premier League"],
+      ["🇪🇸 La Liga", "🇩🇪 Bundesliga"],
+      ["🇫🇷 Ligue 1", "🇳🇱 Eredivisie"],
+      ["📊 Tutte le partite"],
+      ["✅ Tutto"]
+    ],
+    resize_keyboard: true
+  };
+}
+
+// =============================
+// ✅ WELCOME
+// =============================
+function welcomeText() {
+  return `
+👋 Benvenuto in *Pronostici Calcio Intelligenti*
+
+⚽ Analizzo le partite dei principali campionati con un modello statistico (Poisson).
+
+🔥 TOP 10:
+Sono i 10 pronostici migliori tra TUTTI i campionati (non solo una lega).
+
+📩 Ogni venerdì alle 16 riceverai:
+• TOP 10 globali
+• Tutte le partite del weekend
+• 2 pronostici per match
+• Risultati esatti più probabili
+
+⚙️ Puoi scegliere cosa ricevere dal menu 👇
+`;
+}
+
+// =============================
+// ✅ ICONE
+// =============================
+function icon(pct) {
+  if (pct >= 0.65) return "✅";
+  if (pct >= 0.55) return "🔥";
+  return "⚖️";
+}
+
+// =============================
+// ✅ STATISTICHE
 // =============================
 function getStats(team, matches) {
   const games = matches.filter(m => m.home === team || m.away === team);
@@ -107,7 +155,7 @@ function calculateBets(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ CARICAMENTO DATI
+// ✅ LOAD DATI
 // =============================
 async function loadData() {
 
@@ -115,135 +163,174 @@ async function loadData() {
 
   for (const lg of LEAGUES) {
 
-    try {
+    const res = await fetch(BASE_URL + lg.slug);
+    const json = await res.json();
 
-      const res = await fetch(BASE_URL + lg.slug);
-      const json = await res.json();
+    const played = [];
+    const upcoming = [];
 
-      const played = [];
-      const upcoming = [];
+    json.forEach(r => {
+      const finished = r.HomeTeamScore !== null && r.AwayTeamScore !== null;
 
-      json.forEach(r => {
-        const finished = r.HomeTeamScore !== null && r.AwayTeamScore !== null;
+      const m = {
+        home: r.HomeTeam,
+        away: r.AwayTeam,
+        hg: r.HomeTeamScore,
+        ag: r.AwayTeamScore
+      };
 
-        const m = {
-          home: r.HomeTeam,
-          away: r.AwayTeam,
-          hg: r.HomeTeamScore,
-          ag: r.AwayTeamScore
-        };
+      if (finished) played.push(m);
+      else upcoming.push(m);
+    });
 
-        if (finished) played.push(m);
-        else upcoming.push(m);
+    let matches = [];
+
+    upcoming.slice(0, 10).forEach(m => {
+
+      const h = getStats(m.home, played);
+      const a = getStats(m.away, played);
+
+      const lambdaH = (h.gf + a.ga) / 2;
+      const lambdaA = (a.gf + h.ga) / 2;
+
+      const res = calculateBets(lambdaH, lambdaA);
+
+      matches.push({
+        home: m.home,
+        away: m.away,
+        bets: res.topBets,
+        scores: res.scores
       });
 
-      let matches = [];
+    });
 
-      upcoming.slice(0, 10).forEach(m => {
-
-        const h = getStats(m.home, played);
-        const a = getStats(m.away, played);
-
-        const lambdaH = (h.gf + a.ga) / 2;
-        const lambdaA = (a.gf + h.ga) / 2;
-
-        const res = calculateBets(lambdaH, lambdaA);
-
-        matches.push({
-          home: m.home,
-          away: m.away,
-          bets: res.topBets,
-          scores: res.scores
-        });
-
-      });
-
-      matchesByLeague[lg.name] = matches;
-
-    } catch {
-      console.log("Errore su lega:", lg.name);
-    }
+    matchesByLeague[lg.name] = matches;
   }
 
   return matchesByLeague;
 }
 
 // =============================
-// ✅ ICONE TIPSTER
+// ✅ MESSAGGIO TIPSTER
 // =============================
-function icon(pct) {
-  if (pct >= 0.65) return "✅";
-  if (pct >= 0.55) return "🔥";
-  return "⚖️";
-}
+function buildMessage(data) {
 
-// =============================
-// ✅ MAIN
-// =============================
-async function run() {
+  let all = [];
+  Object.values(data).forEach(arr => all = all.concat(arr));
 
-  console.log("🚀 BOT AVVIATO");
+  all.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
+  const top10 = all.slice(0, 10);
 
-  const data = await loadData();
-
-  let allMatches = [];
-
-  Object.values(data).forEach(arr => {
-    allMatches = allMatches.concat(arr);
-  });
-
-  if (allMatches.length === 0) {
-    await sendMessage("⚠️ Nessuna partita disponibile");
-    return;
-  }
-
-  // =============================
-  // 🔥 TOP 10
-  // =============================
-
-  allMatches.sort((a, b) => b.bets[0].pct - a.bets[0].pct);
-
-  const top10 = allMatches.slice(0, 10);
-
-  let message = "🔥🔥 TOP 10 VALUE PICKS 🔥🔥\n\n";
+  let msg = "🔥🔥 TOP 10 VALUE PICKS 🔥🔥\n\n";
 
   top10.forEach((m, i) => {
-    message += `${i + 1}) ${m.home} - ${m.away}\n`;
-    message += `${icon(m.bets[0].pct)} ${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%)\n`;
-    message += `${icon(m.bets[1].pct)} ${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
+    msg += `${i + 1}) ${m.home} - ${m.away}\n`;
+    msg += `${icon(m.bets[0].pct)} ${m.bets[0].label} (${(m.bets[0].pct * 100).toFixed(0)}%)\n`;
+    msg += `${icon(m.bets[1].pct)} ${m.bets[1].label} (${(m.bets[1].pct * 100).toFixed(0)}%)\n\n`;
   });
 
-  message += "----------------------------------\n\n";
-
-  // =============================
-  // 📊 CAMPIONATI
-  // =============================
+  msg += "----------------------------------\n\n";
 
   for (const lg in data) {
-
-    message += `📊 ${lg}\n\n`;
+    msg += `📊 ${lg}\n\n`;
 
     data[lg].forEach(m => {
-      message += `🔸 ${m.home} - ${m.away}\n`;
-      message += `👉 ${m.bets[0].label} | ${m.bets[1].label}\n`;
-      message += `🎯 ${m.scores[0].score} / ${m.scores[1].score}\n\n`;
+      msg += `🔸 ${m.home} - ${m.away}\n`;
+      msg += `👉 ${m.bets[0].label} | ${m.bets[1].label}\n`;
+      msg += `🎯 ${m.scores[0].score} / ${m.scores[1].score}\n\n`;
     });
 
-    message += "----------------------------------\n\n";
+    msg += "----------------------------------\n\n";
   }
 
-  // =============================
-  // ⚠️ FOOTER
-  // =============================
-  message += "⚠️ Modello Poisson\n";
-  message += "📈 Solo a scopo informativo";
+  msg += "⚠️ Modello Poisson\n📈 Solo scopo informativo";
 
-  // Telegram limit
-  if (message.length > 3500) {
-    message = message.substring(0, 3500);
-  }
+  if (msg.length > 3500) msg = msg.substring(0, 3500);
 
-  await sendMessage(message);
+  return msg;
 }
 
-run();
+// =============================
+// ✅ HANDLE UTENTE
+// =============================
+async function handleUpdate(update) {
+
+  if (!update.message) return;
+
+  const chatId = update.message.chat.id;
+  const text = update.message.text;
+
+  if (text === "/start") {
+    await sendMessage(chatId, welcomeText(), buildMenu());
+  }
+
+  if (text.includes("TOP")) {
+    await sendMessage(chatId, "✅ Riceverai TOP 10 globali");
+  }
+
+  if (text.includes("Serie A")) {
+    await sendMessage(chatId, "✅ Solo Serie A selezionata");
+  }
+
+  if (text.includes("Premier")) {
+    await sendMessage(chatId, "✅ Solo Premier League");
+  }
+
+  if (text.includes("Liga")) {
+    await sendMessage(chatId, "✅ Solo La Liga");
+  }
+
+  if (text.includes("Bundesliga")) {
+    await sendMessage(chatId, "✅ Solo Bundesliga");
+  }
+
+  if (text.includes("Ligue")) {
+    await sendMessage(chatId, "✅ Solo Ligue 1");
+  }
+
+  if (text.includes("Eredivisie")) {
+    await sendMessage(chatId, "✅ Solo Eredivisie");
+  }
+
+  if (text.includes("Tutto")) {
+    await sendMessage(chatId, "✅ Riceverai tutto");
+  }
+}
+
+// =============================
+// ✅ LISTEN (solo locale)
+// =============================
+async function listen() {
+  let offset = 0;
+
+  while (true) {
+    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/getUpdates?offset=${offset}`);
+    const data = await res.json();
+
+    for (const update of data.result) {
+      offset = update.update_id + 1;
+      await handleUpdate(update);
+    }
+
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+// =============================
+// ✅ RUN (GitHub)
+// =============================
+async function run() {
+  const data = await loadData();
+  const msg = buildMessage(data);
+  await sendMessage(CHAT_ID, msg);
+}
+
+// =============================
+// ✅ AVVIO
+// =============================
+
+if (process.env.RUN_LISTENER === "true") {
+  listen();
+} else {
+  run();
+}
