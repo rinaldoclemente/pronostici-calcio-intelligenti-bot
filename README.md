@@ -1,4 +1,4 @@
-# ⚽ Rinaldo Scout — Betting Intelligence Bot
+# ⚽ Pronostici calcio intelligenti
 
 🔥 Analisi automatica delle partite di calcio basata su modello statistico avanzato per individuare **pronostici con reale valore**.
 
