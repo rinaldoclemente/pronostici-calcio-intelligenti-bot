@@ -1,4 +1,4 @@
-name: Pronostici calcio intelligenti
+name: Report statistiche bot
 
 on:
   schedule:
