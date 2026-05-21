@@ -1,0 +1,31 @@
+name: Pronostici calcio intelligenti
+
+on:
+  schedule:
+    # Mercoledì ore 08:00 italiane circa durante ora legale
+    # GitHub Actions usa UTC
+    - cron: "0 6 * * 3"
+
+  workflow_dispatch:
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run report
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TIMEZONE: Europe/Rome
+          SHOW_NUMBERS: "false"
+          TEAM_FORM_N: "10"
+          TOP_LIMIT: "10"
+        run: node report.js
