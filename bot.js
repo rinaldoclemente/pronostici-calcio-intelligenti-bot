@@ -1,7 +1,12 @@
 import fs from "fs";
 
-// ======================================================function formatDateIT(dateUtc) {// ======================================================
+// ======================================================
+// DATE UTILS
+// ======================================================
+
+function formatDateIT(dateUtc) {
   const d = parseDateValue(dateUtc);
+
   if (!d) return "";
 
   return new Intl.DateTimeFormat("it-IT", {
@@ -13,6 +18,7 @@ import fs from "fs";
     minute: "2-digit"
   }).format(d);
 }
+
 
 // ======================================================
 // FETCH
