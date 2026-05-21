@@ -4,7 +4,8 @@
   "type": "module",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "report": "node report.js"
   },
   "engines": {
     "node": ">=18"
