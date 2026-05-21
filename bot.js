@@ -1,185 +1,6 @@
 import fs from "fs";
 
-// ======================================================
-// CONFIG
-// ======================================================
-const TOKEN = process.env.BOT_TOKEN;
-
-if (!TOKEN) {
-  console.error("❌ BOT_TOKEN mancante. Imposta la variabile ambiente BOT_TOKEN.");
-  process.exit(1);
-}
-
-const USERS_FILE = process.env.USERS_FILE || "users.json";
-
-const BASE_URL = "https://fixturedownload.com/feed/json/";
-
-const LEAGUES = [
-  { name: "SERIE A", flag: "🇮🇹", slug: "serie-a-2025" },
-  { name: "PREMIER LEAGUE", flag: "🏴", slug: "epl-2025" },
-  { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga-2025" },
-  { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga-2025" },
-  { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1-2025" },
-  { name: "EREDIVISIE", flag: "🇳🇱", slug: "eredivisie-2025" }
-];
-
-// Invio automatico giornaliero
-const ENABLE_SCHEDULE = process.env.ENABLE_SCHEDULE !== "false";
-const RUN_ON_START = process.env.RUN_ON_START === "true";
-
-// Ora locale Europe/Rome
-const SCHEDULE_HOUR = Number(process.env.SCHEDULE_HOUR || 10);
-const SCHEDULE_MINUTE = Number(process.env.SCHEDULE_MINUTE || 0);
-const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
-
-// Se true mostra percentuali e quota stimata.
-// Default false per mantenere stile tipster pulito.
-const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
-
-// Numero massimo partite nel riepilogo top
-const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
-
-// Ultime N partite per statistiche squadra
-const TEAM_FORM_N = Number(process.env.TEAM_FORM_N || 10);
-
-// Admin opzionali per /run.
-// Esempio env: ADMIN_IDS="123456,987654"
-// Se vuoto, tutti gli utenti registrati possono usare /run.
-const ADMIN_IDS = (process.env.ADMIN_IDS || "")
-  .split(",")
-  .map(x => x.trim())
-  .filter(Boolean);
-
-// ======================================================
-// UTENTI
-// ======================================================
-function loadUsers() {
-  try {
-    if (!fs.existsSync(USERS_FILE)) return [];
-    const raw = fs.readFileSync(USERS_FILE, "utf8");
-    const users = JSON.parse(raw);
-    return Array.isArray(users) ? users : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-}
-
-function addUser(chatId) {
-  const users = loadUsers();
-  const id = String(chatId);
-
-  if (!users.includes(id)) {
-    users.push(id);
-    saveUsers(users);
-  }
-}
-
-function removeUser(chatId) {
-  const id = String(chatId);
-  const users = loadUsers().filter(x => x !== id);
-  saveUsers(users);
-}
-
-function isAdmin(chatId) {
-  if (!ADMIN_IDS.length) return true;
-  return ADMIN_IDS.includes(String(chatId));
-}
-
-// ======================================================
-// TELEGRAM API
-// ======================================================
-async function telegram(method, payload) {
-  const url = `https://api.telegram.org/bot${TOKEN}/${method}`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Telegram ${method} error: ${res.status} ${text}`);
-  }
-
-  return res.json();
-}
-
-function splitMessage(text, maxLen = 3900) {
-  if (text.length <= maxLen) return [text];
-
-  const parts = [];
-  let rest = text;
-
-  while (rest.length > maxLen) {
-    let idx = rest.lastIndexOf("\n", maxLen);
-    if (idx < 500) idx = maxLen;
-
-    parts.push(rest.slice(0, idx));
-    rest = rest.slice(idx).trim();
-  }
-
-  if (rest.length) parts.push(rest);
-  return parts;
-}
-
-async function sendMessage(chatId, text) {
-  const chunks = splitMessage(text);
-
-  for (const chunk of chunks) {
-    await telegram("sendMessage", {
-      chat_id: chatId,
-      text: chunk,
-      disable_web_page_preview: true
-    });
-  }
-}
-
-async function sendToAll(text) {
-  const users = loadUsers();
-
-  if (!users.length) {
-    console.log("ℹ️ Nessun utente registrato.");
-    return;
-  }
-
-  for (const id of users) {
-    try {
-      await sendMessage(id, text);
-      console.log(`✅ Messaggio inviato a ${id}`);
-    } catch (err) {
-      console.error(`❌ Errore invio a ${id}:`, err.message);
-    }
-  }
-}
-
-// ======================================================
-// DATE UTILS
-// ======================================================
-function parseDateValue(value) {
-  if (!value) return null;
-
-  let s = String(value).trim();
-
-  // Converte "YYYY-MM-DD HH:mm:ss" in ISO-like.
-  s = s.replace(" ", "T");
-
-  // Se non c'è timezone, assumiamo UTC perché il campo è DateUtc.
-  const hasTimezone =
-    s.endsWith("Z") ||
-    /[+-]\d{2}:?\d{2}$/.test(s);
-
-  if (!hasTimezone) s += "Z";
-
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatDateIT(dateUtc) {
+// ======================================================function formatDateIT(dateUtc) {// ======================================================
   const d = parseDateValue(dateUtc);
   if (!d) return "";
 
@@ -193,38 +14,12 @@ function formatDateIT(dateUtc) {
   }).format(d);
 }
 
-function getLocalParts() {
-  const parts = new Intl.DateTimeFormat("it-IT", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(new Date());
-
-  const obj = {};
-  for (const p of parts) {
-    if (p.type !== "literal") obj[p.type] = p.value;
-  }
-
-  return {
-    year: obj.year,
-    month: obj.month,
-    day: obj.day,
-    hour: Number(obj.hour),
-    minute: Number(obj.minute),
-    key: `${obj.year}-${obj.month}-${obj.day}`
-  };
-}
-
 // ======================================================
-// FETCH CON TIMEOUT
+// FETCH
 // ======================================================
 async function fetchJsonWithTimeout(url, timeoutMs = 15000) {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -240,12 +35,12 @@ async function fetchJsonWithTimeout(url, timeoutMs = 15000) {
 
     return await res.json();
   } finally {
-    clearTimeout(t);
+    clearTimeout(timer);
   }
 }
 
 // ======================================================
-// PARSING FIXTURES
+// PARSE FIXTURES
 // ======================================================
 function parseFixtureData(json, league) {
   const played = [];
@@ -270,7 +65,6 @@ function parseFixtureData(json, league) {
     const match = {
       league: league.name,
       flag: league.flag,
-      slug: league.slug,
       round: Number(r.RoundNumber || 0),
       dateUtc: r.DateUtc || "",
       home: r.HomeTeam,
@@ -282,7 +76,6 @@ function parseFixtureData(json, league) {
     if (hasScore) {
       played.push(match);
     } else {
-      // Scarta partite senza risultato ma già passate.
       if (matchDate) {
         const onlyDate = new Date(matchDate);
         onlyDate.setHours(0, 0, 0, 0);
@@ -312,7 +105,7 @@ function parseFixtureData(json, league) {
 }
 
 // ======================================================
-// MODELLO STATISTICO
+// MODELLO POISSON
 // ======================================================
 function poisson(lambda, k) {
   let fact = 1;
@@ -325,7 +118,7 @@ function poisson(lambda, k) {
 }
 
 function leagueAverage(played) {
-  if (!played || !played.length) {
+  if (!played.length) {
     return { h: 1.35, a: 1.05 };
   }
 
@@ -344,15 +137,13 @@ function leagueAverage(played) {
 }
 
 function teamStats(team, role, n, played) {
-  const limit = Number(n) || 10;
-
   const games = played
     .filter(m => {
       if (role === "home") return m.home === team;
       if (role === "away") return m.away === team;
       return m.home === team || m.away === team;
     })
-    .slice(-limit);
+    .slice(-n);
 
   if (!games.length) return null;
 
@@ -406,17 +197,17 @@ function teamStats(team, role, n, played) {
 }
 
 function calculateMatch(sH, sA, av) {
-  const safeHomeAvg = av.h || 1.35;
-  const safeAwayAvg = av.a || 1.05;
+  const homeAvg = av.h || 1.35;
+  const awayAvg = av.a || 1.05;
 
   const lambdaHomeRaw = Math.max(
     0.2,
-    (sH.gf / safeHomeAvg) * (sA.ga / safeAwayAvg) * safeHomeAvg
+    (sH.gf / homeAvg) * (sA.ga / awayAvg) * homeAvg
   );
 
   const lambdaAwayRaw = Math.max(
     0.2,
-    (sA.gf / safeAwayAvg) * (sH.ga / safeHomeAvg) * safeAwayAvg
+    (sA.gf / awayAvg) * (sH.ga / homeAvg) * awayAvg
   );
 
   const adjustByPoints = p => {
@@ -463,7 +254,7 @@ function calculateMatch(sH, sA, av) {
 }
 
 // ======================================================
-// QUOTA STIMATA INTERNA
+// QUOTA STIMATA
 // ======================================================
 function calcQuota(pct) {
   if (!pct || pct <= 2) return null;
@@ -487,7 +278,7 @@ function buildBets(home, away, res) {
   const maxG = 6;
   const mass = res.mass || 1;
 
-  function accByCondition(fn) {
+  function acc(fn) {
     let sum = 0;
 
     for (let i = 0; i <= maxG; i++) {
@@ -503,94 +294,60 @@ function buildBets(home, away, res) {
   const pD = res.pD;
   const pA = res.pA;
 
-  const over15 = accByCondition((i, j) => i + j > 1);
-  const over25 = accByCondition((i, j) => i + j > 2);
-  const over35 = accByCondition((i, j) => i + j > 3);
-  const under25 = accByCondition((i, j) => i + j <= 2);
-  const under35 = accByCondition((i, j) => i + j <= 3);
+  const bets = [
+    { label: "1", pct: pH },
+    { label: "X", pct: pD },
+    { label: "2", pct: pA },
 
-  const btts = accByCondition((i, j) => i > 0 && j > 0);
-  const noBtts = accByCondition((i, j) => !(i > 0 && j > 0));
+    { label: "1X", pct: pH + pD },
+    { label: "X2", pct: pD + pA },
+    { label: "12", pct: pH + pA },
 
-  const homeScores = accByCondition((i, j) => i >= 1);
-  const awayScores = accByCondition((i, j) => j >= 1);
+    { label: "Over 1.5", pct: acc((i, j) => i + j > 1) },
+    { label: "Over 2.5", pct: acc((i, j) => i + j > 2) },
+    { label: "Over 3.5", pct: acc((i, j) => i + j > 3) },
 
-  const homeCleanSheet = accByCondition((i, j) => j === 0);
-  const awayCleanSheet = accByCondition((i, j) => i === 0);
+    { label: "Under 2.5", pct: acc((i, j) => i + j <= 2) },
+    { label: "Under 3.5", pct: acc((i, j) => i + j <= 3) },
 
-  const mg13 = accByCondition((i, j) => i + j >= 1 && i + j <= 3);
-  const mg23 = accByCondition((i, j) => i + j >= 2 && i + j <= 3);
-  const mg14 = accByCondition((i, j) => i + j >= 1 && i + j <= 4);
+    { label: "BTTS Sì", pct: acc((i, j) => i > 0 && j > 0) },
+    { label: "BTTS No", pct: acc((i, j) => !(i > 0 && j > 0)) },
 
-  const homeWinOver15 = accByCondition((i, j) => i > j && i + j > 1);
-  const homeWinOver25 = accByCondition((i, j) => i > j && i + j > 2);
-  const awayWinOver15 = accByCondition((i, j) => j > i && i + j > 1);
-  const awayWinOver25 = accByCondition((i, j) => j > i && i + j > 2);
+    { label: `${home} segna`, pct: acc((i, j) => i >= 1) },
+    { label: `${away} segna`, pct: acc((i, j) => j >= 1) },
 
-  const drawUnder25 = accByCondition((i, j) => i === j && i + j <= 2);
-  const bttsOver25 = accByCondition((i, j) => i > 0 && j > 0 && i + j > 2);
+    { label: "Multigol 1-3", pct: acc((i, j) => i + j >= 1 && i + j <= 3) },
+    { label: "Multigol 2-3", pct: acc((i, j) => i + j >= 2 && i + j <= 3) },
+    { label: "Multigol 1-4", pct: acc((i, j) => i + j >= 1 && i + j <= 4) },
 
-  const dc1xOver15 = accByCondition((i, j) => i >= j && i + j > 1);
-  const dc1xUnder35 = accByCondition((i, j) => i >= j && i + j <= 3);
-  const dcx2Over15 = accByCondition((i, j) => j >= i && i + j > 1);
-  const dcx2Under35 = accByCondition((i, j) => j >= i && i + j <= 3);
+    { label: "1 + Over 1.5", pct: acc((i, j) => i > j && i + j > 1) },
+    { label: "1 + Over 2.5", pct: acc((i, j) => i > j && i + j > 2) },
+    { label: "2 + Over 1.5", pct: acc((i, j) => j > i && i + j > 1) },
+    { label: "2 + Over 2.5", pct: acc((i, j) => j > i && i + j > 2) },
 
-  let bets = [
-    { label: "1", pct: pH, cat: "1x2" },
-    { label: "X", pct: pD, cat: "1x2" },
-    { label: "2", pct: pA, cat: "1x2" },
+    { label: "X + Under 2.5", pct: acc((i, j) => i === j && i + j <= 2) },
+    { label: "BTTS + Over 2.5", pct: acc((i, j) => i > 0 && j > 0 && i + j > 2) },
 
-    { label: "1X", pct: pH + pD, cat: "doppia" },
-    { label: "X2", pct: pD + pA, cat: "doppia" },
-    { label: "12", pct: pH + pA, cat: "doppia" },
-
-    { label: "Over 1.5", pct: over15, cat: "gol" },
-    { label: "Over 2.5", pct: over25, cat: "gol" },
-    { label: "Over 3.5", pct: over35, cat: "gol" },
-    { label: "Under 2.5", pct: under25, cat: "gol" },
-    { label: "Under 3.5", pct: under35, cat: "gol" },
-
-    { label: "BTTS Sì", pct: btts, cat: "btts" },
-    { label: "BTTS No", pct: noBtts, cat: "btts" },
-
-    { label: `${home} segna`, pct: homeScores, cat: "teamgoal" },
-    { label: `${away} segna`, pct: awayScores, cat: "teamgoal" },
-    { label: `${home} clean sheet`, pct: homeCleanSheet, cat: "teamgoal" },
-    { label: `${away} clean sheet`, pct: awayCleanSheet, cat: "teamgoal" },
-
-    { label: "Multigol 1-3", pct: mg13, cat: "multi" },
-    { label: "Multigol 2-3", pct: mg23, cat: "multi" },
-    { label: "Multigol 1-4", pct: mg14, cat: "multi" },
-
-    { label: "1 + Over 1.5", pct: homeWinOver15, cat: "combo" },
-    { label: "1 + Over 2.5", pct: homeWinOver25, cat: "combo" },
-    { label: "2 + Over 1.5", pct: awayWinOver15, cat: "combo" },
-    { label: "2 + Over 2.5", pct: awayWinOver25, cat: "combo" },
-    { label: "X + Under 2.5", pct: drawUnder25, cat: "combo" },
-    { label: "BTTS + Over 2.5", pct: bttsOver25, cat: "combo" },
-
-    { label: "1X + Over 1.5", pct: dc1xOver15, cat: "combo" },
-    { label: "1X + Under 3.5", pct: dc1xUnder35, cat: "combo" },
-    { label: "X2 + Over 1.5", pct: dcx2Over15, cat: "combo" },
-    { label: "X2 + Under 3.5", pct: dcx2Under35, cat: "combo" }
+    { label: "1X + Over 1.5", pct: acc((i, j) => i >= j && i + j > 1) },
+    { label: "1X + Under 3.5", pct: acc((i, j) => i >= j && i + j <= 3) },
+    { label: "X2 + Over 1.5", pct: acc((i, j) => j >= i && i + j > 1) },
+    { label: "X2 + Under 3.5", pct: acc((i, j) => j >= i && i + j <= 3) }
   ];
 
-  bets = bets
+  const clean = bets
     .map(b => {
-      const pctInt = Math.round(b.pct * 100);
+      const pct = Math.round(b.pct * 100);
 
       return {
-        ...b,
-        pctValue: b.pct,
-        pct: pctInt,
-        quota: calcQuota(pctInt)
+        label: b.label,
+        pct,
+        quota: calcQuota(pct)
       };
     })
-    // Evita mercati troppo bassi o troppo “scontati”
     .filter(b => b.pct >= 40 && b.pct <= 88)
     .sort((a, b) => b.pct - a.pct);
 
-  return selectThreeLevels(bets);
+  return selectThreeLevels(clean);
 }
 
 function selectThreeLevels(bets) {
@@ -616,14 +373,14 @@ function selectThreeLevels(bets) {
 }
 
 // ======================================================
-// LOAD DATI E GENERAZIONE ANALISI
+// LOAD DATA
 // ======================================================
 async function loadData() {
   const matches = [];
 
   for (const lg of LEAGUES) {
     try {
-      console.log(`📥 Carico ${lg.name}...`);
+      console.log(`📥 Carico ${lg.name}`);
 
       const json = await fetchJsonWithTimeout(BASE_URL + lg.slug);
 
@@ -634,19 +391,13 @@ async function loadData() {
 
       const { played, upcoming } = parseFixtureData(json, lg);
 
-      if (!played.length) {
-        console.warn(`⚠️ Nessuna partita giocata per ${lg.name}`);
-        continue;
-      }
-
-      if (!upcoming.length) {
-        console.warn(`⚠️ Nessuna partita futura per ${lg.name}`);
+      if (!played.length || !upcoming.length) {
+        console.warn(`⚠️ Dati insufficienti per ${lg.name}`);
         continue;
       }
 
       const av = leagueAverage(played);
 
-      // Solo prossima giornata del campionato
       const nextRound = Math.min(
         ...upcoming
           .map(m => m.round || 999)
@@ -666,8 +417,8 @@ async function loadData() {
 
         if (!sH || !sA) continue;
 
-        const resMatch = calculateMatch(sH, sA, av);
-        const bets = buildBets(m.home, m.away, resMatch);
+        const res = calculateMatch(sH, sA, av);
+        const bets = buildBets(m.home, m.away, res);
 
         if (!bets.length) continue;
 
@@ -678,11 +429,11 @@ async function loadData() {
           dateUtc: m.dateUtc,
           home: m.home,
           away: m.away,
-          xgHome: resMatch.lambdaH,
-          xgAway: resMatch.lambdaA,
-          p1: Math.round(resMatch.pH * 100),
-          px: Math.round(resMatch.pD * 100),
-          p2: Math.round(resMatch.pA * 100),
+          xgHome: res.lambdaH,
+          xgAway: res.lambdaA,
+          p1: Math.round(res.pH * 100),
+          px: Math.round(res.pD * 100),
+          p2: Math.round(res.pA * 100),
           bets
         });
       }
@@ -697,7 +448,7 @@ async function loadData() {
 }
 
 // ======================================================
-// FORMAT MESSAGGIO
+// MESSAGE
 // ======================================================
 function formatBet(bet) {
   if (!bet) return "-";
@@ -720,9 +471,9 @@ function buildMessage(matches) {
   const top = matches.slice(0, TOP_LIMIT);
 
   let msg = "";
+
   msg += "📊 RINALDO SCOUT — ANALISI CALCIO\n";
   msg += "━━━━━━━━━━━━━━━\n\n";
-
   msg += `🔥 TOP ${top.length} SCENARI STATISTICI\n\n`;
 
   for (const m of top) {
@@ -774,201 +525,162 @@ function buildMessage(matches) {
 }
 
 // ======================================================
-// RUN
+// MAIN
 // ======================================================
-let isRunning = false;
+async function main() {
+  console.log("🚀 Avvio job GitHub Actions");
 
-async function run(reason = "manuale") {
-  if (isRunning) {
-    console.log("⏳ Run già in corso, salto.");
+  const users = loadUsers();
+
+  if (!users.length) {
+    console.log("⚠️ Nessun utente in users.json. Termino.");
     return;
   }
 
-  isRunning = true;
+  const matches = await loadData();
+
+  if (!matches.length) {
+    await sendToAll("⚠️ Nessuna partita analizzabile trovata oggi.");
+    return;
+  }
+
+  const msg = buildMessage(matches);
+
+  await sendToAll(msg);
+
+  console.log("✅ Job completato");
+}
+
+main().catch(async err => {
+  console.error("❌ Errore fatale:", err);
 
   try {
-    console.log(`🚀 Avvio analisi: ${reason}`);
+    await sendToAll("⚠️ Errore durante il calcolo automatico delle analisi.");
+  } catch {}
 
-    const matches = await loadData();
+  process.exit(1);
+});
+// CONFIG
+// ======================================================
+const TOKEN = process.env.BOT_TOKEN;
 
-    if (!matches.length) {
-      await sendToAll("⚠️ Nessuna partita analizzabile trovata oggi.");
-      return;
-    }
+if (!TOKEN) {
+  console.error("❌ BOT_TOKEN mancante. Configura il secret BOT_TOKEN su GitHub.");
+  process.exit(1);
+}
 
-    const msg = buildMessage(matches);
+const USERS_FILE = "users.json";
+const BASE_URL = "https://fixturedownload.com/feed/json/";
 
-    await sendToAll(msg);
+const LEAGUES = [
+  { name: "SERIE A", flag: "🇮🇹", slug: "serie-a-2025" },
+  { name: "PREMIER LEAGUE", flag: "🏴", slug: "epl-2025" },
+  { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga-2025" },
+  { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga-2025" },
+  { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1-2025" },
+  { name: "EREDIVISIE", flag: "🇳🇱", slug: "eredivisie-2025" }
+];
 
-    console.log(`✅ Analisi completata. Partite: ${matches.length}`);
+const TEAM_FORM_N = Number(process.env.TEAM_FORM_N || 10);
+const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
+const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
+const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
+
+// ======================================================
+// USERS
+// ======================================================
+function loadUsers() {
+  try {
+    const raw = fs.readFileSync(USERS_FILE, "utf8");
+    const users = JSON.parse(raw);
+
+    if (!Array.isArray(users)) return [];
+
+    return users.map(String).filter(Boolean);
   } catch (err) {
-    console.error("❌ Errore run:", err);
-
-    await sendToAll(
-      "⚠️ Errore durante il calcolo automatico delle analisi. Riproverò al prossimo ciclo."
-    );
-  } finally {
-    isRunning = false;
+    console.error("❌ Errore lettura users.json:", err.message);
+    return [];
   }
 }
 
 // ======================================================
-// LONG POLLING TELEGRAM
+// TELEGRAM
 // ======================================================
-let offset = 0;
+async function sendTelegram(chatId, text) {
+  const chunks = splitMessage(text);
 
-async function handleUpdate(update) {
-  const msg = update.message;
-  if (!msg || !msg.chat) return;
-
-  const chatId = String(msg.chat.id);
-  const text = (msg.text || "").trim();
-
-  if (!text.startsWith("/")) return;
-
-  if (text.startsWith("/start")) {
-    addUser(chatId);
-
-    await sendMessage(
-      chatId,
-      "✅ Sei registrato a Rinaldo Scout.\n\n" +
-      "Riceverai automaticamente le analisi statistiche programmate.\n\n" +
-      "Comandi disponibili:\n" +
-      "/run — genera subito le analisi\n" +
-      "/stop — disattiva gli invii\n" +
-      "/help — mostra aiuto"
-    );
-
-    return;
-  }
-
-  if (text.startsWith("/stop")) {
-    removeUser(chatId);
-
-    await sendMessage(
-      chatId,
-      "🛑 Invii disattivati. Puoi riattivarli in qualsiasi momento con /start."
-    );
-
-    return;
-  }
-
-  if (text.startsWith("/help")) {
-    await sendMessage(
-      chatId,
-      "📊 Rinaldo Scout — Bot Analisi Calcio\n\n" +
-      "/start — registrati agli invii\n" +
-      "/stop — disattiva gli invii\n" +
-      "/run — genera subito le analisi\n\n" +
-      "Le analisi sono basate su dati storici, modello Poisson e statistiche casa/trasferta.\n" +
-      "Sono contenuti informativi, non consigli finanziari o di gioco."
-    );
-
-    return;
-  }
-
-  if (text.startsWith("/run")) {
-    if (!isAdmin(chatId)) {
-      await sendMessage(chatId, "⛔ Non sei autorizzato a usare questo comando.");
-      return;
-    }
-
-    await sendMessage(chatId, "⏳ Calcolo analisi in corso...");
-    await run(`comando /run da ${chatId}`);
-
-    return;
-  }
-}
-
-async function pollTelegram() {
-  try {
-    const url = `https://api.telegram.org/bot${TOKEN}/getUpdates`;
-
-    const res = await fetch(url, {
+  for (const chunk of chunks) {
+    const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
-        offset,
-        timeout: 25,
-        allowed_updates: ["message"]
+        chat_id: chatId,
+        text: chunk,
+        disable_web_page_preview: true
       })
     });
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`getUpdates ${res.status}: ${body}`);
+      throw new Error(`Telegram error ${res.status}: ${body}`);
     }
-
-    const data = await res.json();
-
-    if (!data.ok) {
-      throw new Error(`getUpdates not ok`);
-    }
-
-    for (const update of data.result) {
-      offset = update.update_id + 1;
-
-      try {
-        await handleUpdate(update);
-      } catch (err) {
-        console.error("❌ Errore handleUpdate:", err.message);
-      }
-    }
-  } catch (err) {
-    console.error("❌ Polling error:", err.message);
-    await sleep(3000);
   }
-
-  setTimeout(pollTelegram, 500);
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+async function sendToAll(text) {
+  const users = loadUsers();
 
-// ======================================================
-// SCHEDULER
-// ======================================================
-let lastRunKey = null;
-
-function startScheduler() {
-  if (!ENABLE_SCHEDULE) {
-    console.log("ℹ️ Scheduler disattivato.");
+  if (!users.length) {
+    console.log("⚠️ Nessun utente presente in users.json");
     return;
   }
 
-  console.log(
-    `🕒 Scheduler attivo: ogni giorno alle ${String(SCHEDULE_HOUR).padStart(2, "0")}:${String(SCHEDULE_MINUTE).padStart(2, "0")} ${TIMEZONE}`
-  );
-
-  setInterval(async () => {
-    const now = getLocalParts();
-
-    if (
-      now.hour === SCHEDULE_HOUR &&
-      now.minute === SCHEDULE_MINUTE &&
-      lastRunKey !== now.key
-    ) {
-      lastRunKey = now.key;
-      await run("scheduler giornaliero");
+  for (const id of users) {
+    try {
+      await sendTelegram(id, text);
+      console.log(`✅ Inviato a ${id}`);
+    } catch (err) {
+      console.error(`❌ Errore invio a ${id}:`, err.message);
     }
-  }, 30_000);
-}
-
-// ======================================================
-// START
-// ======================================================
-async function main() {
-  console.log("🤖 Bot avviato.");
-  console.log(`👥 Utenti registrati: ${loadUsers().length}`);
-  console.log(`🔢 SHOW_NUMBERS: ${SHOW_NUMBERS ? "true" : "false"}`);
-
-  pollTelegram();
-  startScheduler();
-
-  if (RUN_ON_START) {
-    await run("startup");
   }
 }
 
-main();
+function splitMessage(text, maxLen = 3900) {
+  if (text.length <= maxLen) return [text];
+
+  const parts = [];
+  let rest = text;
+
+  while (rest.length > maxLen) {
+    let cut = rest.lastIndexOf("\n", maxLen);
+    if (cut < 500) cut = maxLen;
+
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trim();
+  }
+
+  if (rest.length) parts.push(rest);
+
+  return parts;
+}
+
+// ======================================================
+// DATE UTILS
+// ======================================================
+function parseDateValue(value) {
+  if (!value) return null;
+
+  let s = String(value).trim().replace(" ", "T");
+
+  const hasTimezone =
+    s.endsWith("Z") ||
+    /[+-]\d{2}:?\d{2}$/.test(s);
+
+  if (!hasTimezone) s += "Z";
+
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
