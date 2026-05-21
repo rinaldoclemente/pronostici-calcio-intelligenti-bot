@@ -1,8 +1,12 @@
-name: Telegram Bot
+name: Rinaldo Scout Bot
 
 on:
   schedule:
-    - cron: "0 14 * * 5"  # ✅ venerdì ore 15 Italia (13 UTC)
+    # Ogni venerdì alle 10:00 italiane circa
+    # GitHub Actions usa UTC
+    # 08:00 UTC = 10:00 Italia (ora legale)
+    - cron: "0 8 * * 5"
+
   workflow_dispatch:
 
 jobs:
@@ -10,16 +14,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: "20"
 
-      - run: npm install node-fetch
-
-      - run: node bot.js
+      - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: npm start
