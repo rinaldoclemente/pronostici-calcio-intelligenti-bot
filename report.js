@@ -825,8 +825,8 @@ async function loadReportData() {
 // MESSAGGI REPORT
 // ======================================================
 function resultIcon(outcome) {
-  if (outcome === true) return "✓";
-  if (outcome === false) return "✗";
+  if (outcome === true) return "✅";
+  if (outcome === false) return "❌";
   return "?";
 }
 
@@ -870,7 +870,6 @@ function buildMainReportMessage(allMatches) {
   msg += "✅ Sicura → primo pick del modello\n";
   msg += "⚖️ Equilibrata → secondo pick\n";
   msg += "🔥 Value → terzo pick, più aggressivo\n";
-  msg += "✓ preso | ✗ non preso\n\n";
 
   msg += "━━━━━━━━━━━━━━━\n\n";
   msg += `🏆 TOP ${top.length} VALUE BET — RISULTATI\n\n`;
