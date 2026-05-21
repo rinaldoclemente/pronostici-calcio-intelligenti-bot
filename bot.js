@@ -15,7 +15,7 @@ const BASE_URL = "https://fixturedownload.com/feed/json/";
 
 const LEAGUES = [
   { name: "SERIE A", flag: "🇮🇹", slug: "serie-a-2025" },
-  { name: "PREMIER LEAGUE", flag: "🏴", slug: "epl-2025" },
+  { name: "PREMIER LEAGUE", flag: "🇬🇧", slug: "epl-2025" },
   { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga-2025" },
   { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga-2025" },
   { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1-2025" },
