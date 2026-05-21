@@ -6,7 +6,7 @@ import fs from "fs";
 const TOKEN = process.env.BOT_TOKEN;
 
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN mancante. Aggiungilo nei GitHub Secrets.");
+  console.error("❌ BOT_TOKEN mancante. Configuralo nei GitHub Secrets.");
   process.exit(1);
 }
 
@@ -15,7 +15,7 @@ const BASE_URL = "https://fixturedownload.com/feed/json/";
 
 const LEAGUES = [
   { name: "SERIE A", flag: "🇮🇹", slug: "serie-a-2025" },
-  { name: "PREMIER LEAGUE", flag: "🇬🇧", slug: "epl-2025" },
+  { name: "PREMIER LEAGUE", flag: "🏴", slug: "epl-2025" },
   { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga-2025" },
   { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga-2025" },
   { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1-2025" },
@@ -27,12 +27,18 @@ const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
 const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
 const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
 
-// Telegram consente max 4096 caratteri.
-// Usiamo 3300 per sicurezza.
-const TELEGRAM_SAFE_LIMIT = 3300;
+// Telegram ha limite 4096. Teniamoci bassi.
+const TELEGRAM_LIMIT = 3000;
 
-// Delay tra invii per evitare rate limit.
-const SEND_DELAY_MS = 850;
+// Pausa tra messaggi allo stesso utente.
+const MESSAGE_DELAY_MS = Number(process.env.MESSAGE_DELAY_MS || 2500);
+
+// Pausa tra utenti.
+const USER_DELAY_MS = Number(process.env.USER_DELAY_MS || 2500);
+
+// Timeout fetch.
+const FETCH_TIMEOUT_MS = 15000;
+const TELEGRAM_TIMEOUT_MS = 20000;
 
 // ======================================================
 // USERS
@@ -61,6 +67,10 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function safeText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 function parseDateValue(value) {
   if (!value) return null;
 
@@ -70,12 +80,9 @@ function parseDateValue(value) {
     s.endsWith("Z") ||
     /[+-]\d{2}:?\d{2}$/.test(s);
 
-  if (!hasTimezone) {
-    s += "Z";
-  }
+  if (!hasTimezone) s += "Z";
 
   const d = new Date(s);
-
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
@@ -94,141 +101,34 @@ function formatDateIT(dateUtc) {
   }).format(d);
 }
 
-function splitMessage(text, maxLen = TELEGRAM_SAFE_LIMIT) {
-  if (!text || text.length <= maxLen) {
-    return [text || ""];
-  }
+function splitMessage(text, limit = TELEGRAM_LIMIT) {
+  if (!text) return [""];
+
+  if (text.length <= limit) return [text];
 
   const parts = [];
   let rest = text;
 
-  while (rest.length > maxLen) {
-    let cut = rest.lastIndexOf("\n", maxLen);
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf("\n\n", limit);
 
-    if (cut < 800) {
-      cut = rest.lastIndexOf(" ", maxLen);
-    }
-
-    if (cut < 800) {
-      cut = maxLen;
-    }
+    if (cut < 800) cut = rest.lastIndexOf("\n", limit);
+    if (cut < 800) cut = rest.lastIndexOf(" ", limit);
+    if (cut < 800) cut = limit;
 
     const part = rest.slice(0, cut).trim();
 
-    if (part.length) {
-      parts.push(part);
-    }
+    if (part.length) parts.push(part);
 
     rest = rest.slice(cut).trim();
   }
 
-  if (rest.length) {
-    parts.push(rest);
-  }
+  if (rest.length) parts.push(rest);
 
   return parts;
 }
 
-// ======================================================
-// TELEGRAM
-// ======================================================
-async function sendTelegramRaw(chatId, text) {
-  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true
-    })
-  });
-
-  const body = await res.text();
-
-  console.log(`📨 Telegram response for ${chatId}:`, body);
-
-  if (!res.ok) {
-    throw new Error(`Telegram error ${res.status}: ${body}`);
-  }
-
-  return body;
-}
-
-async function sendTelegramWithRetry(chatId, text, attempt = 1) {
-  try {
-    await sendTelegramRaw(chatId, text);
-  } catch (err) {
-    console.error(`❌ Errore invio a ${chatId}, tentativo ${attempt}:`, err.message);
-
-    if (attempt < 3) {
-      await sleep(1500 * attempt);
-      return sendTelegramWithRetry(chatId, text, attempt + 1);
-    }
-
-    throw err;
-  }
-}
-
-async function sendMessageToUser(chatId, text, label = "messaggio") {
-  const chunks = splitMessage(text);
-
-  console.log(`📤 Invio ${label} a ${chatId}. Parti: ${chunks.length}`);
-
-  for (let i = 0; i < chunks.length; i++) {
-    const prefix =
-      chunks.length > 1
-        ? `Parte ${i + 1}/${chunks.length}\n\n`
-        : "";
-
-    await sendTelegramWithRetry(chatId, prefix + chunks[i]);
-
-    await sleep(SEND_DELAY_MS);
-  }
-}
-
-async function broadcastMessages(messages) {
-  const users = loadUsers();
-
-  if (!users.length) {
-    console.log("⚠️ Nessun utente trovato in users.json.");
-    return;
-  }
-
-  console.log(`👥 Utenti caricati: ${users.length}`);
-  console.log(`📦 Messaggi da inviare a ogni utente: ${messages.length}`);
-
-  for (const userId of users) {
-    console.log(`\n🚀 Inizio invio completo a ${userId}`);
-
-    for (let i = 0; i < messages.length; i++) {
-      const item = messages[i];
-
-      try {
-        await sendMessageToUser(
-          userId,
-          item.text,
-          item.title || `messaggio ${i + 1}`
-        );
-      } catch (err) {
-        console.error(
-          `❌ Messaggio "${item.title}" non inviato a ${userId}:`,
-          err.message
-        );
-      }
-
-      await sleep(SEND_DELAY_MS);
-    }
-
-    console.log(`✅ Invio completo terminato per ${userId}\n`);
-  }
-}
-
-// ======================================================
-// FETCH
-// ======================================================
-async function fetchJsonWithTimeout(url, timeoutMs = 15000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
 
   const timer = setTimeout(() => {
@@ -236,21 +136,177 @@ async function fetchJsonWithTimeout(url, timeoutMs = 15000) {
   }, timeoutMs);
 
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "RinaldoScoutBot/1.0"
-      }
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
     });
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-
-    return await res.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ======================================================
+// TELEGRAM
+// ======================================================
+function extractRetryAfter(bodyText) {
+  try {
+    const json = JSON.parse(bodyText);
+    return json?.parameters?.retry_after
+      ? Number(json.parameters.retry_after)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sendTelegramRaw(chatId, text) {
+  const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
+
+  const payload = {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true
+  };
+
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    },
+    TELEGRAM_TIMEOUT_MS
+  );
+
+  const body = await res.text();
+
+  console.log(`📨 Telegram response ${chatId}: ${body}`);
+
+  if (!res.ok) {
+    const err = new Error(`Telegram ${res.status}: ${body}`);
+    err.status = res.status;
+    err.body = body;
+    err.retryAfter = extractRetryAfter(body);
+    throw err;
+  }
+
+  return body;
+}
+
+async function sendTelegramWithRetry(chatId, text, label = "messaggio") {
+  const maxAttempts = 5;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`📤 Invio "${label}" a ${chatId}, tentativo ${attempt}`);
+      await sendTelegramRaw(chatId, text);
+      return true;
+    } catch (err) {
+      console.error(`❌ Errore invio "${label}" a ${chatId}:`, err.message);
+
+      if (err.status === 429) {
+        const waitSec = err.retryAfter || 10;
+        console.log(`⏳ Rate limit Telegram. Attendo ${waitSec + 2}s...`);
+        await sleep((waitSec + 2) * 1000);
+        continue;
+      }
+
+      if (attempt < maxAttempts) {
+        const wait = 3000 * attempt;
+        console.log(`⏳ Riprovo tra ${wait}ms...`);
+        await sleep(wait);
+        continue;
+      }
+
+      return false;
+    }
+  }
+
+  return false;
+}
+
+async function sendOneLogicalMessage(chatId, text, title) {
+  const chunks = splitMessage(text);
+
+  console.log(`📦 "${title}" diviso in ${chunks.length} parte/i`);
+
+  let allOk = true;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const prefix =
+      chunks.length > 1
+        ? `📄 ${title} — Parte ${i + 1}/${chunks.length}\n\n`
+        : "";
+
+    const ok = await sendTelegramWithRetry(
+      chatId,
+      prefix + chunks[i],
+      `${title} parte ${i + 1}/${chunks.length}`
+    );
+
+    if (!ok) allOk = false;
+
+    await sleep(MESSAGE_DELAY_MS);
+  }
+
+  return allOk;
+}
+
+async function broadcastAllMessages(messages) {
+  const users = loadUsers();
+
+  if (!users.length) {
+    console.log("⚠️ Nessun utente in users.json.");
+    return;
+  }
+
+  console.log(`👥 Utenti: ${users.length}`);
+  console.log(`📨 Messaggi logici da inviare a ogni utente: ${messages.length}`);
+
+  for (const chatId of users) {
+    console.log(`\n🚀 Inizio invio completo a ${chatId}`);
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      console.log(`➡️ Invio ${i + 1}/${messages.length}: ${msg.title}`);
+      console.log(`📏 Lunghezza: ${msg.text.length} caratteri`);
+
+      const ok = await sendOneLogicalMessage(chatId, msg.text, msg.title);
+
+      if (!ok) {
+        console.error(`⚠️ Invio non completato per: ${msg.title}`);
+      }
+
+      await sleep(MESSAGE_DELAY_MS);
+    }
+
+    console.log(`✅ Fine invio a ${chatId}`);
+    await sleep(USER_DELAY_MS);
+  }
+}
+
+// ======================================================
+// FETCH DATI CAMPIONATI
+// ======================================================
+async function fetchJsonWithTimeout(url) {
+  const res = await fetchWithTimeout(
+    url,
+    {
+      headers: {
+        "User-Agent": "RinaldoScoutBot/1.0"
+      }
+    },
+    FETCH_TIMEOUT_MS
+  );
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  return await res.json();
 }
 
 // ======================================================
@@ -282,8 +338,8 @@ function parseFixtureData(json, league) {
       slug: league.slug,
       round: Number(r.RoundNumber || 0),
       dateUtc: r.DateUtc || "",
-      home: r.HomeTeam,
-      away: r.AwayTeam,
+      home: safeText(r.HomeTeam),
+      away: safeText(r.AwayTeam),
       hg: hasScore ? Number(r.HomeTeamScore) : null,
       ag: hasScore ? Number(r.AwayTeamScore) : null
     };
@@ -311,9 +367,7 @@ function parseFixtureData(json, league) {
   });
 
   upcoming.sort((a, b) => {
-    if (a.round !== b.round) {
-      return a.round - b.round;
-    }
+    if (a.round !== b.round) return a.round - b.round;
 
     const da = parseDateValue(a.dateUtc)?.getTime() || 0;
     const db = parseDateValue(b.dateUtc)?.getTime() || 0;
@@ -324,7 +378,7 @@ function parseFixtureData(json, league) {
 }
 
 // ======================================================
-// POISSON
+// MODELLO POISSON
 // ======================================================
 function poisson(lambda, k) {
   let fact = 1;
@@ -336,9 +390,6 @@ function poisson(lambda, k) {
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / fact;
 }
 
-// ======================================================
-// STATS
-// ======================================================
 function leagueAverage(played) {
   if (!played || !played.length) {
     return {
@@ -422,9 +473,6 @@ function teamStats(team, role, n, played) {
   };
 }
 
-// ======================================================
-// MATCH MODEL
-// ======================================================
 function calculateMatch(sH, sA, av) {
   const homeAvg = av.h || 1.35;
   const awayAvg = av.a || 1.05;
@@ -483,7 +531,7 @@ function calculateMatch(sH, sA, av) {
 }
 
 // ======================================================
-// QUOTA STIMATA INTERNA
+// QUOTA STIMATA
 // ======================================================
 function calcQuota(pct) {
   if (!pct || pct <= 2) return null;
@@ -504,7 +552,7 @@ function calcQuota(pct) {
 }
 
 // ======================================================
-// BETS
+// MERCATI
 // ======================================================
 function buildBets(home, away, res) {
   const sp = res.matrix;
@@ -516,74 +564,67 @@ function buildBets(home, away, res) {
 
     for (let i = 0; i <= maxG; i++) {
       for (let j = 0; j <= maxG; j++) {
-        if (fn(i, j)) {
-          sum += sp[i][j];
-        }
+        if (fn(i, j)) sum += sp[i][j];
       }
     }
 
     return sum / mass;
   }
 
-  const pH = res.pH;
-  const pD = res.pD;
-  const pA = res.pA;
+  const raw = [
+    { label: "1", pct: res.pH },
+    { label: "X", pct: res.pD },
+    { label: "2", pct: res.pA },
 
-  const rawBets = [
-    { label: "1", pct: pH, type: "1x2" },
-    { label: "X", pct: pD, type: "1x2" },
-    { label: "2", pct: pA, type: "1x2" },
+    { label: "1X", pct: res.pH + res.pD },
+    { label: "X2", pct: res.pD + res.pA },
+    { label: "12", pct: res.pH + res.pA },
 
-    { label: "1X", pct: pH + pD, type: "safe" },
-    { label: "X2", pct: pD + pA, type: "safe" },
-    { label: "12", pct: pH + pA, type: "safe" },
+    { label: "Over 1.5", pct: acc((i, j) => i + j > 1) },
+    { label: "Over 2.5", pct: acc((i, j) => i + j > 2) },
+    { label: "Over 3.5", pct: acc((i, j) => i + j > 3) },
 
-    { label: "Over 1.5", pct: acc((i, j) => i + j > 1), type: "goals" },
-    { label: "Over 2.5", pct: acc((i, j) => i + j > 2), type: "goals" },
-    { label: "Over 3.5", pct: acc((i, j) => i + j > 3), type: "goals" },
+    { label: "Under 2.5", pct: acc((i, j) => i + j <= 2) },
+    { label: "Under 3.5", pct: acc((i, j) => i + j <= 3) },
 
-    { label: "Under 2.5", pct: acc((i, j) => i + j <= 2), type: "goals" },
-    { label: "Under 3.5", pct: acc((i, j) => i + j <= 3), type: "goals" },
+    { label: "BTTS Sì", pct: acc((i, j) => i > 0 && j > 0) },
+    { label: "BTTS No", pct: acc((i, j) => !(i > 0 && j > 0)) },
 
-    { label: "BTTS Sì", pct: acc((i, j) => i > 0 && j > 0), type: "btts" },
-    { label: "BTTS No", pct: acc((i, j) => !(i > 0 && j > 0)), type: "btts" },
+    { label: `${home} segna`, pct: acc((i, j) => i >= 1) },
+    { label: `${away} segna`, pct: acc((i, j) => j >= 1) },
 
-    { label: `${home} segna`, pct: acc((i, j) => i >= 1), type: "team" },
-    { label: `${away} segna`, pct: acc((i, j) => j >= 1), type: "team" },
+    { label: "Multigol 1-3", pct: acc((i, j) => i + j >= 1 && i + j <= 3) },
+    { label: "Multigol 2-3", pct: acc((i, j) => i + j >= 2 && i + j <= 3) },
+    { label: "Multigol 1-4", pct: acc((i, j) => i + j >= 1 && i + j <= 4) },
 
-    { label: "Multigol 1-3", pct: acc((i, j) => i + j >= 1 && i + j <= 3), type: "multi" },
-    { label: "Multigol 2-3", pct: acc((i, j) => i + j >= 2 && i + j <= 3), type: "multi" },
-    { label: "Multigol 1-4", pct: acc((i, j) => i + j >= 1 && i + j <= 4), type: "multi" },
+    { label: "1 + Over 1.5", pct: acc((i, j) => i > j && i + j > 1) },
+    { label: "1 + Over 2.5", pct: acc((i, j) => i > j && i + j > 2) },
+    { label: "2 + Over 1.5", pct: acc((i, j) => j > i && i + j > 1) },
+    { label: "2 + Over 2.5", pct: acc((i, j) => j > i && i + j > 2) },
 
-    { label: "1 + Over 1.5", pct: acc((i, j) => i > j && i + j > 1), type: "combo" },
-    { label: "1 + Over 2.5", pct: acc((i, j) => i > j && i + j > 2), type: "combo" },
-    { label: "2 + Over 1.5", pct: acc((i, j) => j > i && i + j > 1), type: "combo" },
-    { label: "2 + Over 2.5", pct: acc((i, j) => j > i && i + j > 2), type: "combo" },
+    { label: "X + Under 2.5", pct: acc((i, j) => i === j && i + j <= 2) },
+    { label: "BTTS + Over 2.5", pct: acc((i, j) => i > 0 && j > 0 && i + j > 2) },
 
-    { label: "X + Under 2.5", pct: acc((i, j) => i === j && i + j <= 2), type: "combo" },
-    { label: "BTTS + Over 2.5", pct: acc((i, j) => i > 0 && j > 0 && i + j > 2), type: "combo" },
-
-    { label: "1X + Over 1.5", pct: acc((i, j) => i >= j && i + j > 1), type: "combo" },
-    { label: "1X + Under 3.5", pct: acc((i, j) => i >= j && i + j <= 3), type: "combo" },
-    { label: "X2 + Over 1.5", pct: acc((i, j) => j >= i && i + j > 1), type: "combo" },
-    { label: "X2 + Under 3.5", pct: acc((i, j) => j >= i && i + j <= 3), type: "combo" }
+    { label: "1X + Over 1.5", pct: acc((i, j) => i >= j && i + j > 1) },
+    { label: "1X + Under 3.5", pct: acc((i, j) => i >= j && i + j <= 3) },
+    { label: "X2 + Over 1.5", pct: acc((i, j) => j >= i && i + j > 1) },
+    { label: "X2 + Under 3.5", pct: acc((i, j) => j >= i && i + j <= 3) }
   ];
 
-  const clean = rawBets
+  const bets = raw
     .map(b => {
       const pct = Math.round(b.pct * 100);
 
       return {
         label: b.label,
         pct,
-        quota: calcQuota(pct),
-        type: b.type
+        quota: calcQuota(pct)
       };
     })
     .filter(b => b.pct >= 40 && b.pct <= 88)
     .sort((a, b) => b.pct - a.pct);
 
-  return selectThreeLevels(clean);
+  return selectThreeLevels(bets);
 }
 
 function selectThreeLevels(bets) {
@@ -593,9 +634,7 @@ function selectThreeLevels(bets) {
   const mid = bets.find(b => b.pct < 70 && b.pct >= 55);
   const value = bets.find(b => b.pct < 55 && b.pct >= 40);
 
-  if (safe) {
-    result.push(safe);
-  }
+  if (safe) result.push(safe);
 
   if (mid && !result.some(x => x.label === mid.label)) {
     result.push(mid);
@@ -619,94 +658,143 @@ function selectThreeLevels(bets) {
 // ======================================================
 // LOAD DATA
 // ======================================================
-async function loadData() {
-  const matches = [];
+async function analyzeLeague(league) {
+  const result = {
+    league,
+    status: "pending",
+    playedCount: 0,
+    upcomingCount: 0,
+    targetCount: 0,
+    matches: [],
+    error: null
+  };
 
-  for (const lg of LEAGUES) {
-    try {
-      console.log(`\n📥 Carico ${lg.name}`);
+  try {
+    console.log(`\n📥 Carico ${league.name}`);
 
-      const json = await fetchJsonWithTimeout(BASE_URL + lg.slug);
+    const json = await fetchJsonWithTimeout(BASE_URL + league.slug);
 
-      if (!Array.isArray(json) || !json.length) {
-        console.log(`⚠️ Dati vuoti per ${lg.name}`);
-        continue;
-      }
-
-      const { played, upcoming } = parseFixtureData(json, lg);
-
-      console.log(`✅ ${lg.name}: played=${played.length}, upcoming=${upcoming.length}`);
-
-      if (!played.length || !upcoming.length) {
-        continue;
-      }
-
-      const av = leagueAverage(played);
-
-      const rounds = upcoming
-        .map(m => m.round || 999)
-        .filter(Boolean);
-
-      if (!rounds.length) {
-        console.log(`⚠️ Nessuna giornata valida per ${lg.name}`);
-        continue;
-      }
-
-      const nextRound = Math.min(...rounds);
-
-      const targetMatches = upcoming.filter(m => m.round === nextRound);
-
-      console.log(`🎯 ${lg.name}: prossima giornata ${nextRound}, partite=${targetMatches.length}`);
-
-      for (const m of targetMatches) {
-        const sH =
-          teamStats(m.home, "home", TEAM_FORM_N, played) ||
-          teamStats(m.home, "both", TEAM_FORM_N, played);
-
-        const sA =
-          teamStats(m.away, "away", TEAM_FORM_N, played) ||
-          teamStats(m.away, "both", TEAM_FORM_N, played);
-
-        if (!sH || !sA) {
-          console.log(`⚠️ Stats insufficienti: ${m.home} - ${m.away}`);
-          continue;
-        }
-
-        const res = calculateMatch(sH, sA, av);
-        const bets = buildBets(m.home, m.away, res);
-
-        if (!bets.length) {
-          console.log(`⚠️ Nessun pick valido: ${m.home} - ${m.away}`);
-          continue;
-        }
-
-        matches.push({
-          league: lg.name,
-          flag: lg.flag,
-          round: m.round,
-          dateUtc: m.dateUtc,
-          home: m.home,
-          away: m.away,
-          p1: Math.round(res.pH * 100),
-          px: Math.round(res.pD * 100),
-          p2: Math.round(res.pA * 100),
-          xgHome: res.lambdaH,
-          xgAway: res.lambdaA,
-          bets
-        });
-      }
-    } catch (err) {
-      console.error(`❌ Errore ${lg.name}:`, err.message);
+    if (!Array.isArray(json) || !json.length) {
+      result.status = "empty";
+      result.error = "Feed vuoto";
+      return result;
     }
+
+    const { played, upcoming } = parseFixtureData(json, league);
+
+    result.playedCount = played.length;
+    result.upcomingCount = upcoming.length;
+
+    console.log(
+      `✅ ${league.name}: played=${played.length}, upcoming=${upcoming.length}`
+    );
+
+    if (!played.length) {
+      result.status = "no_played";
+      result.error = "Nessuna partita giocata";
+      return result;
+    }
+
+    if (!upcoming.length) {
+      result.status = "no_upcoming";
+      result.error = "Nessuna partita futura";
+      return result;
+    }
+
+    const av = leagueAverage(played);
+
+    const validRounds = upcoming
+      .map(m => m.round || 999)
+      .filter(Boolean);
+
+    if (!validRounds.length) {
+      result.status = "no_round";
+      result.error = "Nessuna giornata valida";
+      return result;
+    }
+
+    const nextRound = Math.min(...validRounds);
+
+    const targetMatches = upcoming.filter(m => m.round === nextRound);
+
+    result.targetCount = targetMatches.length;
+
+    console.log(
+      `🎯 ${league.name}: prossima giornata=${nextRound}, partite=${targetMatches.length}`
+    );
+
+    for (const m of targetMatches) {
+      const sH =
+        teamStats(m.home, "home", TEAM_FORM_N, played) ||
+        teamStats(m.home, "both", TEAM_FORM_N, played);
+
+      const sA =
+        teamStats(m.away, "away", TEAM_FORM_N, played) ||
+        teamStats(m.away, "both", TEAM_FORM_N, played);
+
+      if (!sH || !sA) {
+        console.log(`⚠️ Stats insufficienti: ${m.home} - ${m.away}`);
+        continue;
+      }
+
+      const model = calculateMatch(sH, sA, av);
+      const bets = buildBets(m.home, m.away, model);
+
+      if (!bets.length) {
+        console.log(`⚠️ Nessun bet valido: ${m.home} - ${m.away}`);
+        continue;
+      }
+
+      result.matches.push({
+        league: league.name,
+        flag: league.flag,
+        round: m.round,
+        dateUtc: m.dateUtc,
+        home: m.home,
+        away: m.away,
+        p1: Math.round(model.pH * 100),
+        px: Math.round(model.pD * 100),
+        p2: Math.round(model.pA * 100),
+        xgHome: model.lambdaH,
+        xgAway: model.lambdaA,
+        bets
+      });
+    }
+
+    result.status = "ok";
+
+    return result;
+  } catch (err) {
+    result.status = "error";
+    result.error = err.message;
+    console.error(`❌ Errore ${league.name}:`, err.message);
+    return result;
+  }
+}
+
+async function loadData() {
+  const leagueResults = [];
+
+  for (const league of LEAGUES) {
+    const res = await analyzeLeague(league);
+    leagueResults.push(res);
+
+    // Piccola pausa tra fetch campionati.
+    await sleep(500);
   }
 
-  console.log(`\n📊 Totale partite analizzate: ${matches.length}`);
+  const allMatches = leagueResults.flatMap(x => x.matches);
 
-  return matches;
+  console.log(`\n📊 Totale partite analizzate: ${allMatches.length}`);
+
+  return {
+    leagueResults,
+    allMatches
+  };
 }
 
 // ======================================================
-// MESSAGE FORMAT
+// FORMAT
 // ======================================================
 function formatBet(bet) {
   if (!bet) return "-";
@@ -715,8 +803,12 @@ function formatBet(bet) {
     return bet.label;
   }
 
-  const quota = bet.quota ? ` · quota stimata ${bet.quota.toFixed(2)}` : "";
+  const quota = bet.quota ? ` · quota ${bet.quota.toFixed(2)}` : "";
   return `${bet.label} · ${bet.pct}%${quota}`;
+}
+
+function compactLine(m) {
+  return `⚽ ${m.home} - ${m.away}\n✅ ${formatBet(m.bets[0])}\n⚖️ ${formatBet(m.bets[1])}\n🔥 ${formatBet(m.bets[2])}`;
 }
 
 function buildMainMessage(matches) {
@@ -730,7 +822,7 @@ function buildMainMessage(matches) {
 
   let msg = "";
 
-  msg += "🔥 Ecco le 10 migliori letture statistiche del weekend 🔥\n\n";
+  msg += "🔥 Ecco le migliori letture statistiche del weekend 🔥\n\n";
   msg += "Ho analizzato forma recente, rendimento casa/trasferta e modello Poisson per individuare gli scenari più interessanti.\n\n";
 
   msg += "📌 COME LEGGERE I PICKS\n";
@@ -741,14 +833,16 @@ function buildMainMessage(matches) {
   msg += "━━━━━━━━━━━━━━━\n\n";
   msg += `🏆 TOP ${top.length} PICKS\n\n`;
 
+  if (!top.length) {
+    msg += "Nessun pick disponibile oggi.\n\n";
+  }
+
   for (const m of top) {
     const date = formatDateIT(m.dateUtc);
 
     msg += `${m.flag} ${m.home} - ${m.away}\n`;
 
-    if (date) {
-      msg += `🗓 ${date}\n`;
-    }
+    if (date) msg += `🗓 ${date}\n`;
 
     msg += `✅ ${formatBet(m.bets[0])}\n`;
     msg += `⚖️ ${formatBet(m.bets[1])}\n`;
@@ -756,7 +850,7 @@ function buildMainMessage(matches) {
 
     if (SHOW_NUMBERS) {
       msg += `📈 1X2: 1 ${m.p1}% · X ${m.px}% · 2 ${m.p2}%\n`;
-      msg += `⚽ xG stimati: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
+      msg += `⚽ xG: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
     }
 
     msg += "\n";
@@ -769,63 +863,115 @@ function buildMainMessage(matches) {
   return msg;
 }
 
-function buildLeagueMessages(matches) {
-  const map = {};
+function buildLeagueMessage(leagueResult) {
+  const { league, matches, status, playedCount, upcomingCount, targetCount, error } =
+    leagueResult;
 
-  for (const m of matches) {
-    if (!map[m.league]) {
-      map[m.league] = [];
+  let msg = "";
+
+  msg += `${league.flag} ${league.name} — analisi completa giornata\n\n`;
+  msg += "Legenda:\n";
+  msg += "✅ Sicura | ⚖️ Equilibrata | 🔥 Value\n\n";
+  msg += "━━━━━━━━━━━━━━━\n\n";
+
+  if (!matches.length) {
+    msg += "⚠️ Nessuna partita analizzabile per questo campionato.\n\n";
+    msg += `Stato: ${status}\n`;
+    msg += `Partite giocate nel feed: ${playedCount}\n`;
+    msg += `Partite future nel feed: ${upcomingCount}\n`;
+    msg += `Partite target: ${targetCount}\n`;
+
+    if (error) {
+      msg += `Motivo: ${error}\n`;
     }
 
-    map[m.league].push(m);
+    msg += "\nQuesto può succedere se il feed non contiene ancora la prossima giornata o se i dati sono incompleti.";
+    return msg;
   }
 
+  const sorted = [...matches].sort((a, b) => {
+    const da = parseDateValue(a.dateUtc)?.getTime() || 0;
+    const db = parseDateValue(b.dateUtc)?.getTime() || 0;
+    return da - db;
+  });
+
+  for (const m of sorted) {
+    const date = formatDateIT(m.dateUtc);
+
+    msg += `⚽ ${m.home} - ${m.away}\n`;
+
+    if (date) msg += `🗓 ${date}\n`;
+
+    msg += `✅ ${formatBet(m.bets[0])}\n`;
+    msg += `⚖️ ${formatBet(m.bets[1])}\n`;
+    msg += `🔥 ${formatBet(m.bets[2])}\n`;
+
+    if (SHOW_NUMBERS) {
+      msg += `📈 1X2: 1 ${m.p1}% · X ${m.px}% · 2 ${m.p2}%\n`;
+      msg += `⚽ xG: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
+    }
+
+    msg += "\n";
+  }
+
+  msg += "⚠️ Analisi statistica automatica, non garanzia di esito.";
+
+  return msg;
+}
+
+function buildSummaryMessage(leagueResults) {
+  let msg = "";
+
+  msg += "📋 Riepilogo invio campionati\n\n";
+
+  for (const r of leagueResults) {
+    const icon = r.matches.length ? "✅" : "⚠️";
+    msg += `${icon} ${r.league.flag} ${r.league.name}: ${r.matches.length} partite analizzate`;
+    if (!r.matches.length && r.error) {
+      msg += ` — ${r.error}`;
+    }
+    msg += "\n";
+  }
+
+  msg += "\nSe un campionato risulta vuoto, significa che il feed non aveva partite future valide o dati sufficienti.";
+
+  return msg;
+}
+
+function buildAllMessages(leagueResults, allMatches) {
   const messages = [];
 
-  for (const leagueName of Object.keys(map)) {
-    const arr = map[leagueName].sort((a, b) => {
-      const da = parseDateValue(a.dateUtc)?.getTime() || 0;
-      const db = parseDateValue(b.dateUtc)?.getTime() || 0;
-      return da - db;
-    });
+  messages.push({
+    title: "TOP PICKS",
+    text: buildMainMessage(allMatches)
+  });
 
-    const flag = arr[0]?.flag || "";
+  // Fondamentale: crea un messaggio per OGNI campionato della lista,
+  // anche se non ci sono match analizzabili.
+  for (const league of LEAGUES) {
+    const result = leagueResults.find(x => x.league.slug === league.slug);
 
-    let msg = "";
+    if (!result) {
+      messages.push({
+        title: league.name,
+        text:
+          `${league.flag} ${league.name} — analisi completa giornata\n\n` +
+          "⚠️ Campionato non processato."
+      });
 
-    msg += `${flag} ${leagueName} — analisi completa giornata\n\n`;
-    msg += "Legenda rapida:\n";
-    msg += "✅ Sicura | ⚖️ Equilibrata | 🔥 Value\n\n";
-    msg += "━━━━━━━━━━━━━━━\n\n";
-
-    for (const m of arr) {
-      const date = formatDateIT(m.dateUtc);
-
-      msg += `⚽ ${m.home} - ${m.away}\n`;
-
-      if (date) {
-        msg += `🗓 ${date}\n`;
-      }
-
-      msg += `✅ ${formatBet(m.bets[0])}\n`;
-      msg += `⚖️ ${formatBet(m.bets[1])}\n`;
-      msg += `🔥 ${formatBet(m.bets[2])}\n`;
-
-      if (SHOW_NUMBERS) {
-        msg += `📈 1X2: 1 ${m.p1}% · X ${m.px}% · 2 ${m.p2}%\n`;
-        msg += `⚽ xG: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
-      }
-
-      msg += "\n";
+      continue;
     }
 
-    msg += "⚠️ Analisi statistica automatica, non garanzia di esito.";
-
     messages.push({
-      title: leagueName,
-      text: msg
+      title: league.name,
+      text: buildLeagueMessage(result)
     });
   }
+
+  messages.push({
+    title: "RIEPILOGO",
+    text: buildSummaryMessage(leagueResults)
+  });
 
   return messages;
 }
@@ -834,61 +980,39 @@ function buildLeagueMessages(matches) {
 // MAIN
 // ======================================================
 async function main() {
-  console.log("🚀 Avvio job bot GitHub Actions");
+  console.log("🚀 Avvio job GitHub Actions");
 
   const users = loadUsers();
 
   if (!users.length) {
-    console.log("⚠️ users.json vuoto. Nessun invio effettuato.");
+    console.log("⚠️ Nessun utente trovato in users.json.");
     return;
   }
 
   console.log(`👥 Utenti destinatari: ${users.length}`);
 
-  const matches = await loadData();
+  const { leagueResults, allMatches } = await loadData();
 
-  if (!matches.length) {
-    await broadcastMessages([
-      {
-        title: "Nessuna partita",
-        text: "⚠️ Nessuna partita analizzabile trovata per questo weekend."
-      }
-    ]);
+  const messages = buildAllMessages(leagueResults, allMatches);
 
-    return;
-  }
+  console.log(`\n📦 Messaggi logici generati: ${messages.length}`);
 
-  const messages = [];
-
-  messages.push({
-    title: "TOP 10 weekend",
-    text: buildMainMessage(matches)
+  messages.forEach((m, idx) => {
+    console.log(`${idx + 1}. ${m.title} — ${m.text.length} caratteri`);
   });
 
-  const leagueMessages = buildLeagueMessages(matches);
+  await broadcastAllMessages(messages);
 
-  for (const msg of leagueMessages) {
-    messages.push(msg);
-  }
-
-  console.log(`📦 Messaggi totali generati: ${messages.length}`);
-
-  for (const m of messages) {
-    console.log(`📏 ${m.title}: ${m.text.length} caratteri`);
-  }
-
-  await broadcastMessages(messages);
-
-  console.log("✅ Job completato correttamente");
+  console.log("✅ Job completato");
 }
 
 main().catch(async err => {
   console.error("❌ Errore fatale:", err);
 
   try {
-    await broadcastMessages([
+    await broadcastAllMessages([
       {
-        title: "Errore",
+        title: "ERRORE",
         text: "⚠️ Errore durante l'elaborazione automatica delle analisi."
       }
     ]);
