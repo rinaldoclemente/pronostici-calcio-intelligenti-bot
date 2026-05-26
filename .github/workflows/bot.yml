@@ -4,24 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       TEST_MODE:
-        description: "Attiva test (true/false)"
+        description: "Attiva modalità test (true/false)"
         required: false
         default: "false"
-      TEST_DATE:
-        description: "Data test (YYYY-MM-DD)"
-        required: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
         with:
           node-version: 18
-      - run: node bot.js
+
+      - name: Run Bot
+        run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TEST_MODE: ${{ github.event.inputs.TEST_MODE }}
-          TEST_DATE: ${{ github.event.inputs.TEST_DATE }}
