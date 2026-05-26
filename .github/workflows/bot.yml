@@ -1,12 +1,9 @@
-name: Pronostici intelligenti bot
+name: Telegram Bot
 
 on:
   schedule:
-    # Ogni venerdì alle 10:00 italiane circa
-    # GitHub Actions usa UTC
-    # 08:00 UTC = 10:00 Italia (ora legale)
-    - cron: "0 8 * * 5"
-
+    - cron: "0 8 * * 5"   # venerdì (campionati)
+    - cron: "0 8 * * *"   # ogni giorno (mondiali)
   workflow_dispatch:
 
 jobs:
@@ -14,15 +11,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v3
         with:
-          node-version: "20"
+          node-version: 18
 
-      - name: Run bot
+      - run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        run: npm start
+``
