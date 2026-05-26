@@ -4,7 +4,7 @@ on:
   schedule:
     # Mercoledì ore 08:00 italiane circa durante ora legale
     # GitHub Actions usa UTC
-    - cron: "0 6 * * 3"
+    #- cron: "0 6 * * 3"
 
   workflow_dispatch:
 
