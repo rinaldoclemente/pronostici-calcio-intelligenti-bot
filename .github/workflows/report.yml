@@ -1,4 +1,4 @@
-name: Report statistiche bot
+name: Invio statistiche passate
 
 on:
   #schedule:
