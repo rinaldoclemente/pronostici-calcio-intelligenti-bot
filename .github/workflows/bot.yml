@@ -1,4 +1,4 @@
-name: Invio pronostici
+name: Telegram Bot
 
 on:
   workflow_dispatch:
@@ -13,16 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Setup Node
-        uses: actions/setup-node@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - name: Run Bot
-        run: node bot.js
+      - run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TEST_MODE: ${{ github.event.inputs.TEST_MODE }}
