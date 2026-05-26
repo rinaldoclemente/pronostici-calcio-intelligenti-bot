@@ -4,9 +4,13 @@ const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
-// ✅ TEST MODE (da YAML)
+// ✅ modalità test
 const TEST_MODE = process.env.TEST_MODE === "true";
-const TEST_DATE = new Date("2026-06-10");
+
+// ✅ data test configurabile da YAML
+const TEST_DATE = process.env.TEST_DATE 
+  ? new Date(process.env.TEST_DATE) 
+  : null;
 
 // =============================
 // ✅ UTENTI
@@ -26,10 +30,7 @@ async function sendToAll(text) {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: id,
-        text
-      })
+      body: JSON.stringify({ chat_id: id, text })
     });
   }
 }
@@ -38,22 +39,22 @@ async function sendToAll(text) {
 // ✅ DATA
 // =============================
 function now() {
-  return TEST_MODE ? TEST_DATE : new Date();
+  if (TEST_MODE && TEST_DATE && !isNaN(TEST_DATE)) {
+    return TEST_DATE;
+  }
+  return new Date();
 }
 
-// ✅ FIX DEFINITIVO DATE
+// ✅ formato sicuro
 function formatDate(d) {
   if (!d) return null;
-
   const date = new Date(d);
-
   if (isNaN(date)) return null;
-
   return date.toISOString().split("T")[0];
 }
 
 // =============================
-// ✅ POISSON
+// ✅ POISSON + STATS
 // =============================
 function poisson(l, k) {
   let fact = 1;
@@ -61,11 +62,7 @@ function poisson(l, k) {
   return (Math.pow(l, k) * Math.exp(-l)) / fact;
 }
 
-// =============================
-// ✅ STATS
-// =============================
 function getStats(team, matches) {
-
   const games = matches.filter(m => m.home === team || m.away === team);
 
   if (!games.length) return { gf: 1.3, ga: 1.3 };
@@ -113,13 +110,13 @@ function calculate(lambdaH, lambdaA) {
     "BTTS": btts
   };
 
-  let bets=[];
+  let bets = [];
 
   Object.entries(base).forEach(([l,p])=>{
     bets.push({label:l,pct:p});
   });
 
-  // ✅ combo corrette
+  // combo corrette
   ["1","X","2"].forEach(r=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
       bets.push({label:`${r} + ${t}`,pct:base[r]*base[t]});
@@ -143,7 +140,7 @@ function calculate(lambdaH, lambdaA) {
   const mid  = bets.find(b=>b.pct<0.7 && b.pct>=0.55);
   const risk = bets.find(b=>b.pct<0.55);
 
-  return [safe,mid,risk].filter(Boolean).slice(0,3);
+  return [safe, mid, risk].filter(Boolean).slice(0,3);
 }
 
 // =============================
@@ -182,9 +179,12 @@ async function loadWorldCup() {
     });
   }
 
-  let matches=[];
+  const current = now();
+  const currentStr = formatDate(current);
 
-  // 🔥 TEST → prime 5 giornate
+  let matches = [];
+
+  // ✅ TEST → tutte le partite dalla data scelta in poi (prime 5 giorni reali del calendario)
   if (TEST_MODE) {
 
     const dates = wc2026
@@ -192,14 +192,15 @@ async function loadWorldCup() {
       .filter(d => d !== null)
       .sort();
 
-    const first5 = [...new Set(dates)].slice(0,5);
+    // trova prime 5 giornate a partire dalla TEST_DATE
+    const filteredDates = dates.filter(d => d >= currentStr);
+    const testDays = [...new Set(filteredDates)].slice(0,5);
 
-    wc2026.forEach(m => {
-
+    wc2026.forEach(m=>{
       const d = formatDate(m.MatchDate);
       if (!d) return;
 
-      if (first5.includes(d)) {
+      if (testDays.includes(d)) {
 
         const h=getStats(m.HomeTeam,played);
         const a=getStats(m.AwayTeam,played);
@@ -214,14 +215,11 @@ async function loadWorldCup() {
 
   } else {
 
-    // ✅ produzione → giorno dopo
-    const current = now();
     const tomorrow = new Date(current);
     tomorrow.setDate(current.getDate()+1);
     const tStr = formatDate(tomorrow);
 
-    wc2026.forEach(m => {
-
+    wc2026.forEach(m=>{
       const d = formatDate(m.MatchDate);
       if (!d) return;
 
@@ -247,13 +245,13 @@ async function loadWorldCup() {
 // =============================
 function buildMessage(matches,title){
 
-  let msg = `🔥 ${title} 🔥\n\n`;
+  let msg=`🔥 ${title} 🔥\n\n`;
 
   matches.slice(0,10).forEach(m=>{
-    msg += `${m.home} - ${m.away}\n`;
-    msg += `✅ ${m.bets[0]?.label}\n`;
-    msg += `⚖️ ${m.bets[1]?.label}\n`;
-    msg += `🔥 ${m.bets[2]?.label}\n\n`;
+    msg+=`${m.home} - ${m.away}\n`;
+    msg+=`✅ ${m.bets[0]?.label}\n`;
+    msg+=`⚖️ ${m.bets[1]?.label}\n`;
+    msg+=`🔥 ${m.bets[2]?.label}\n\n`;
   });
 
   return msg;
@@ -266,14 +264,12 @@ async function run(){
 
   const matches = await loadWorldCup();
 
-  const title = TEST_MODE
-    ? "WORLD CUP TEST (PRIME 5 GIORNATE)"
-    : "WORLD CUP - DOMANI";
+  // ✅ NON INVIA NULLA SE VUOTO
+  if (matches.length === 0) return;
 
-  if (matches.length === 0) {
-    await sendToAll("⚠️ Nessuna partita trovata");
-    return;
-  }
+  const title = TEST_MODE
+    ? "WORLD CUP TEST"
+    : "WORLD CUP - DOMANI";
 
   await sendToAll(buildMessage(matches,title));
 }
