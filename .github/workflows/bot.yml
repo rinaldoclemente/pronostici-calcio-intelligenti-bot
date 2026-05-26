@@ -20,4 +20,3 @@ jobs:
       - run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-``
