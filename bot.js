@@ -181,40 +181,63 @@ async function loadWorldCup() {
 
   let matches = [];
 
-  // ============================
-  // ✅ TEST MODE (SICURO)
-  // ============================
+  // =============================
+  // ✅ TEST MODE (APPENA PARTI)
+  // =============================
   if (TEST_MODE) {
 
-    // ✅ prende tutte le date valide del mondiale
-    const allDates = wc2026
-      .map(m => formatDate(m.MatchDate))
-      .filter(Boolean)
-      .sort();
+    // ✅ prende prime 10 partite disponibili (NON per data)
+    const firstMatches = wc2026.slice(0, 10);
 
-    // ✅ prime 5 giornate REALI
-    const first5Days = [...new Set(allDates)].slice(0,5);
+    firstMatches.forEach(m => {
 
-    wc2026.forEach(m => {
+      if (!m.HomeTeam || !m.AwayTeam) return;
 
-      const d = formatDate(m.MatchDate);
-      if (!d) return;
+      const h = getStats(m.HomeTeam, played);
+      const a = getStats(m.AwayTeam, played);
 
-      if (first5Days.includes(d)) {
-
-        const h = getStats(m.HomeTeam, played);
-        const a = getStats(m.AwayTeam, played);
-
-        matches.push({
-          home: m.HomeTeam,
-          away: m.AwayTeam,
-          bets: calculate((h.gf + a.ga) / 2, (a.gf + h.ga) / 2)
-        });
-      }
+      matches.push({
+        home: m.HomeTeam,
+        away: m.AwayTeam,
+        bets: calculate(
+          (h.gf + a.ga) / 2,
+          (a.gf + h.ga) / 2
+        )
+      });
     });
 
     return matches;
   }
+
+  // =============================
+  // ✅ PRODUZIONE (GIORNO DOPO)
+  // =============================
+  const current = new Date();
+  const tomorrow = new Date(current);
+  tomorrow.setDate(current.getDate() + 1);
+
+  const tStr = formatDate(tomorrow);
+
+  wc2026.forEach(m => {
+
+    const d = formatDate(m.MatchDate);
+    if (!d) return;
+
+    if (d === tStr) {
+
+      const h = getStats(m.HomeTeam, played);
+      const a = getStats(m.AwayTeam, played);
+
+      matches.push({
+        home: m.HomeTeam,
+        away: m.AwayTeam,
+        bets: calculate((h.gf + a.ga)/2,(a.gf + h.ga)/2)
+      });
+    }
+  });
+
+  return matches;
+}
 
   // ============================
   // ✅ PRODUZIONE
