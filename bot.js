@@ -4,6 +4,12 @@ const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
+// ✅ MODALITÀ TEST controllata da GitHub
+const TEST_MODE = process.env.TEST_MODE === "true";
+
+// ✅ data simulata
+const TEST_DATE = new Date("2026-06-10");
+
 // =============================
 // ✅ UTENTI
 // =============================
@@ -17,6 +23,7 @@ function loadUsers() {
 
 async function sendToAll(text) {
   const users = loadUsers();
+
   for (const id of users) {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
@@ -27,21 +34,26 @@ async function sendToAll(text) {
 }
 
 // =============================
-// ✅ UTILITY DATE
+// ✅ DATA
 // =============================
+function now() {
+  return TEST_MODE ? TEST_DATE : new Date();
+}
+
 function getDateOnly(d) {
   return new Date(d).toISOString().split("T")[0];
 }
 
 function getMinMaxDates(matches) {
   const dates = matches.map(m => new Date(m.MatchDate));
-  const min = new Date(Math.min(...dates));
-  const max = new Date(Math.max(...dates));
-  return { min, max };
+  return {
+    min: new Date(Math.min(...dates)),
+    max: new Date(Math.max(...dates))
+  };
 }
 
 // =============================
-// ✅ POISSON
+// ✅ POISSON + STATS
 // =============================
 function poisson(l, k) {
   let fact = 1;
@@ -49,9 +61,6 @@ function poisson(l, k) {
   return (Math.pow(l, k) * Math.exp(-l)) / fact;
 }
 
-// =============================
-// ✅ STATS
-// =============================
 function getStats(team, matches) {
   const games = matches.filter(m => m.home === team || m.away === team);
 
@@ -67,7 +76,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO
+// ✅ CALCOLO 3 PICKS
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -102,23 +111,24 @@ function calculate(lambdaH, lambdaA) {
 
   let bets=[];
 
-  Object.entries(base).forEach(([l,p])=>bets.push({label:l,pct:p}));
+  Object.entries(base).forEach(([l,p])=>{
+    bets.push({label:l,pct:p});
+  });
 
-  // ✅ combo corrette
   ["1","X","2"].forEach(r=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${r} + ${t}`, pct:base[r]*base[t]});
+      bets.push({label:`${r} + ${t}`,pct:base[r]*base[t]});
     });
   });
 
   ["1X","X2"].forEach(dc=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${dc} + ${t}`, pct:base[dc]*base[t]});
+      bets.push({label:`${dc} + ${t}`,pct:base[dc]*base[t]});
     });
   });
 
   ["O1.5","O2.5"].forEach(t=>{
-    bets.push({label:`BTTS + ${t}`, pct:base["BTTS"]*base[t]});
+    bets.push({label:`BTTS + ${t}`,pct:base["BTTS"]*base[t]});
   });
 
   bets = bets.filter(b=>b.pct>0.40 && b.pct<0.85);
@@ -132,7 +142,7 @@ function calculate(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ LOAD MONDIALI DINAMICO
+// ✅ LOAD MONDIALI
 // =============================
 async function loadWorldCup() {
 
@@ -143,89 +153,12 @@ async function loadWorldCup() {
     "nations-league-2024"
   ];
 
-  let allPlayed=[];
-  let upcoming2026=[];
+  let played=[];
+  let wc2026=[];
 
   for (const slug of urls){
 
     const json = await (await fetch(BASE_URL + slug)).json();
-
-    json.forEach(r=>{
-
-      if(r.HomeTeamScore!==null){
-        allPlayed.push({
-          home:r.HomeTeam,
-          away:r.AwayTeam,
-          hg:r.HomeTeamScore,
-          ag:r.AwayTeamScore
-        });
-      }
-
-      if(slug==="fifa-world-cup-2026"){
-        upcoming2026.push(r);
-      }
-    });
-  }
-
-  // ✅ date dinamiche
-  const { min, max } = getMinMaxDates(upcoming2026);
-
-  const now = new Date();
-
-  // 👉 attivo dal giorno prima
-  const start = new Date(min);
-  start.setDate(start.getDate()-1);
-
-  if (!(now >= start && now <= max)) return [];
-
-  const tomorrow = new Date();
-  tomorrow.setDate(now.getDate()+1);
-  const tStr = getDateOnly(tomorrow);
-
-  let matches=[];
-
-  upcoming2026.forEach(m=>{
-    const d = m.MatchDate?.split("T")[0];
-
-    if(d===tStr){
-
-      const h=getStats(m.HomeTeam,allPlayed);
-      const a=getStats(m.AwayTeam,allPlayed);
-
-      matches.push({
-        home:m.HomeTeam,
-        away:m.AwayTeam,
-        bets:calculate((h.gf+a.ga)/2,(a.gf+h.ga)/2)
-      });
-    }
-  });
-
-  return matches;
-}
-
-// =============================
-// ✅ LOAD CAMPIONATI DINAMICO
-// =============================
-async function loadLeagues() {
-
-  const now = new Date();
-  let matches=[];
-
-  const leagues = ["serie-a","epl","bundesliga","la-liga","ligue-1","eredivisie"];
-
-  for (const lg of leagues){
-
-    const year = now.getMonth()+1 >= 8 ? now.getFullYear() : now.getFullYear()-1;
-
-    const json = await (await fetch(`${BASE_URL}${lg}-${year}`)).json();
-
-    const { min, max } = getMinMaxDates(json);
-
-    // ✅ filtro stagione dinamico
-    if (!(now >= min && now <= max)) continue;
-
-    const played=[];
-    const upcoming=[];
 
     json.forEach(r=>{
       if(r.HomeTeamScore!==null){
@@ -235,12 +168,42 @@ async function loadLeagues() {
           hg:r.HomeTeamScore,
           ag:r.AwayTeamScore
         });
-      } else {
-        upcoming.push(r);
+      }
+
+      if(slug==="fifa-world-cup-2026"){
+        wc2026.push(r);
       }
     });
+  }
 
-    upcoming.slice(0,5).forEach(m=>{
+  const {min,max} = getMinMaxDates(wc2026);
+
+  const current = now();
+
+  const start = new Date(min);
+  start.setDate(start.getDate()-1);
+
+  if (!TEST_MODE && !(current >= start && current <= max)) return [];
+
+  let validDates;
+
+  if (TEST_MODE) {
+    // ✅ PRIME 5 GIORNATE
+    const allDates = wc2026.map(m=>m.MatchDate.split("T")[0]).sort();
+    validDates = [...new Set(allDates)].slice(0,5);
+  } else {
+    const tomorrow = new Date(current);
+    tomorrow.setDate(current.getDate()+1);
+    validDates = [getDateOnly(tomorrow)];
+  }
+
+  let matches=[];
+
+  wc2026.forEach(m=>{
+    const d = m.MatchDate.split("T")[0];
+
+    if (validDates.includes(d)) {
+
       const h=getStats(m.HomeTeam,played);
       const a=getStats(m.AwayTeam,played);
 
@@ -249,8 +212,8 @@ async function loadLeagues() {
         away:m.AwayTeam,
         bets:calculate((h.gf+a.ga)/2,(a.gf+h.ga)/2)
       });
-    });
-  }
+    }
+  });
 
   return matches;
 }
@@ -277,22 +240,14 @@ function buildMessage(matches,title){
 // =============================
 async function run(){
 
-  const now = new Date();
-  const day = now.getDay();
-
-  // 🔥 MONDIALI (ogni giorno ma solo se attivi)
   const wc = await loadWorldCup();
-  if (wc.length > 0) {
-    await sendToAll(buildMessage(wc,"WORLD CUP - MATCH DOMANI"));
-    return;
-  }
 
-  // ⚽ CAMPIONATI (solo venerdì)
-  if(day===5){
-    const lg = await loadLeagues();
-    if (lg.length > 0){
-      await sendToAll(buildMessage(lg,"WEEKEND PICKS"));
-    }
+  if (wc.length > 0) {
+    const title = TEST_MODE
+      ? "WORLD CUP TEST (PRIME 5 GIORNATE)"
+      : "WORLD CUP - DOMANI";
+
+    await sendToAll(buildMessage(wc,title));
   }
 }
 
