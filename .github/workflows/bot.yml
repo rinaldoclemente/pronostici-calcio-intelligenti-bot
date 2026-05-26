@@ -1,22 +1,28 @@
 name: Telegram Bot
 
 on:
-  schedule:
-    - cron: "0 8 * * 5"   # venerdì (campionati)
-    - cron: "0 8 * * *"   # ogni giorno (mondiali)
   workflow_dispatch:
+    inputs:
+      TEST_MODE:
+        description: "Attiva modalità test (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - uses: actions/setup-node@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - run: node bot.js
+      - name: Run bot
+        run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TEST_MODE: ${{ github.event.inputs.TEST_MODE }}
