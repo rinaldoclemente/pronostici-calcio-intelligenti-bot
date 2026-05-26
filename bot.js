@@ -4,7 +4,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
-// ✅ TEST MODE da GitHub
+// ✅ TEST MODE
 const TEST_MODE = process.env.TEST_MODE === "true";
 
 // =============================
@@ -25,22 +25,9 @@ async function sendToAll(text) {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: id,
-        text
-      })
+      body: JSON.stringify({ chat_id: id, text })
     });
   }
-}
-
-// =============================
-// ✅ DATE SAFE
-// =============================
-function formatDate(d) {
-  if (!d) return null;
-  const date = new Date(d);
-  if (isNaN(date)) return null;
-  return date.toISOString().split("T")[0];
 }
 
 // =============================
@@ -56,7 +43,6 @@ function poisson(l, k) {
 // ✅ STATS
 // =============================
 function getStats(team, matches) {
-
   const games = matches.filter(m => m.home === team || m.away === team);
 
   if (!games.length) return { gf: 1.3, ga: 1.3 };
@@ -71,7 +57,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO 3 PRONOSTICI
+// ✅ CALCOLO PRONOSTICI
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -110,21 +96,21 @@ function calculate(lambdaH, lambdaA) {
     bets.push({label:l,pct:p});
   });
 
-  // ✅ combo corrette
+  // ✅ combo realistiche
   ["1","X","2"].forEach(r=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${r} + ${t}`, pct:base[r]*base[t]});
+      bets.push({label:`${r} + ${t}`,pct:base[r]*base[t]});
     });
   });
 
   ["1X","X2"].forEach(dc=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${dc} + ${t}`, pct:base[dc]*base[t]});
+      bets.push({label:`${dc} + ${t}`,pct:base[dc]*base[t]});
     });
   });
 
   ["O1.5","O2.5"].forEach(t=>{
-    bets.push({label:`BTTS + ${t}`, pct:base["BTTS"]*base[t]});
+    bets.push({label:`BTTS + ${t}`,pct:base["BTTS"]*base[t]});
   });
 
   bets = bets.filter(b=>b.pct>0.40 && b.pct<0.85);
@@ -138,27 +124,32 @@ function calculate(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ LOAD MONDIALI
+// ✅ LOAD WORLD CUP
 // =============================
 async function loadWorldCup() {
 
-  const urls = [
-    "fifa-world-cup-2026",
+  // ✅ calendario ufficiale
+  const schedule = await (await fetch(
+    "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+  )).json();
+
+  const fixtures = schedule.matches;
+
+  // ✅ statistiche storiche
+  const statUrls = [
     "fifa-world-cup-2022",
     "fifa-world-cup-2018",
     "nations-league-2024"
   ];
 
   let played = [];
-  let wc2026 = [];
 
-  for (const slug of urls){
+  for (const slug of statUrls) {
 
     const json = await (await fetch(BASE_URL + slug)).json();
 
     json.forEach(r => {
-
-      if(r.HomeTeamScore !== null){
+      if (r.HomeTeamScore !== null) {
         played.push({
           home: r.HomeTeam,
           away: r.AwayTeam,
@@ -166,33 +157,34 @@ async function loadWorldCup() {
           ag: r.AwayTeamScore
         });
       }
-
-      if(slug === "fifa-world-cup-2026"){
-        wc2026.push(r);
-      }
     });
   }
 
   let matches = [];
 
   // =============================
-  // ✅ TEST → SEMPRE FUNZIONANTE
+  // ✅ TEST MODE
   // =============================
   if (TEST_MODE) {
 
-    const firstMatches = wc2026
-      .filter(m => m.HomeTeam && m.AwayTeam)
-      .slice(0, 10);
+    // prime 5 giornate reali
+    const matchdays = [...new Set(fixtures.map(m => m.round))].slice(0, 5);
 
-    firstMatches.forEach(m => {
+    fixtures.forEach(m => {
 
-      const h = getStats(m.HomeTeam, played);
-      const a = getStats(m.AwayTeam, played);
+      // evita placeholder tipo W101
+      if (!m.team1 || !m.team2) return;
+      if (m.team1.includes("W") || m.team2.includes("W")) return;
+
+      if (!matchdays.includes(m.round)) return;
+
+      const h = getStats(m.team1, played);
+      const a = getStats(m.team2, played);
 
       matches.push({
-        home: m.HomeTeam,
-        away: m.AwayTeam,
-        bets: calculate((h.gf+a.ga)/2, (a.gf+h.ga)/2)
+        home: m.team1,
+        away: m.team2,
+        bets: calculate((h.gf + a.ga)/2,(a.gf + h.ga)/2)
       });
     });
 
@@ -206,24 +198,23 @@ async function loadWorldCup() {
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
 
-  const tStr = formatDate(tomorrow);
+  const tStr = tomorrow.toISOString().split("T")[0];
 
-  wc2026.forEach(m => {
+  fixtures.forEach(m => {
 
-    const d = formatDate(m.MatchDate);
-    if (!d) return;
+    if (!m.team1 || !m.team2) return;
+    if (m.team1.includes("W") || m.team2.includes("W")) return;
 
-    if (d === tStr) {
+    if (m.date !== tStr) return;
 
-      const h = getStats(m.HomeTeam, played);
-      const a = getStats(m.AwayTeam, played);
+    const h = getStats(m.team1, played);
+    const a = getStats(m.team2, played);
 
-      matches.push({
-        home: m.HomeTeam,
-        away: m.AwayTeam,
-        bets: calculate((h.gf+a.ga)/2, (a.gf+h.ga)/2)
-      });
-    }
+    matches.push({
+      home: m.team1,
+      away: m.team2,
+      bets: calculate((h.gf + a.ga)/2,(a.gf + h.ga)/2)
+    });
   });
 
   return matches;
@@ -253,10 +244,8 @@ async function run(){
 
   const matches = await loadWorldCup();
 
-  // ✅ PRODUZIONE → non invia nulla se vuoto
-  if (!TEST_MODE && matches.length === 0) {
-    return;
-  }
+  // ✅ niente invio se vuoto (produzione)
+  if (!TEST_MODE && matches.length === 0) return;
 
   const title = TEST_MODE
     ? "WORLD CUP TEST"
@@ -266,3 +255,4 @@ async function run(){
 }
 
 run();
+``
