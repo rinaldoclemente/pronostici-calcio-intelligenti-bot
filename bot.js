@@ -155,87 +155,93 @@ async function loadWorldCup() {
     "nations-league-2024"
   ];
 
-  let played=[];
-  let wc2026=[];
+  let played = [];
+  let wc2026 = [];
 
   for (const slug of urls){
 
     const json = await (await fetch(BASE_URL + slug)).json();
 
-    json.forEach(r=>{
+    json.forEach(r => {
 
-      if(r.HomeTeamScore!==null){
+      if(r.HomeTeamScore !== null){
         played.push({
-          home:r.HomeTeam,
-          away:r.AwayTeam,
-          hg:r.HomeTeamScore,
-          ag:r.AwayTeamScore
+          home: r.HomeTeam,
+          away: r.AwayTeam,
+          hg: r.HomeTeamScore,
+          ag: r.AwayTeamScore
         });
       }
 
-      if(slug==="fifa-world-cup-2026"){
+      if(slug === "fifa-world-cup-2026"){
         wc2026.push(r);
       }
     });
   }
 
-  const current = now();
-  const currentStr = formatDate(current);
-
   let matches = [];
 
-  // ✅ TEST → tutte le partite dalla data scelta in poi (prime 5 giorni reali del calendario)
+  // ============================
+  // ✅ TEST MODE (SICURO)
+  // ============================
   if (TEST_MODE) {
 
-    const dates = wc2026
+    // ✅ prende tutte le date valide del mondiale
+    const allDates = wc2026
       .map(m => formatDate(m.MatchDate))
-      .filter(d => d !== null)
+      .filter(Boolean)
       .sort();
 
-    // trova prime 5 giornate a partire dalla TEST_DATE
-    const filteredDates = dates.filter(d => d >= currentStr);
-    const testDays = [...new Set(filteredDates)].slice(0,5);
+    // ✅ prime 5 giornate REALI
+    const first5Days = [...new Set(allDates)].slice(0,5);
 
-    wc2026.forEach(m=>{
+    wc2026.forEach(m => {
+
       const d = formatDate(m.MatchDate);
       if (!d) return;
 
-      if (testDays.includes(d)) {
+      if (first5Days.includes(d)) {
 
-        const h=getStats(m.HomeTeam,played);
-        const a=getStats(m.AwayTeam,played);
+        const h = getStats(m.HomeTeam, played);
+        const a = getStats(m.AwayTeam, played);
 
         matches.push({
-          home:m.HomeTeam,
-          away:m.AwayTeam,
-          bets:calculate((h.gf+a.ga)/2,(a.gf+h.ga)/2)
+          home: m.HomeTeam,
+          away: m.AwayTeam,
+          bets: calculate((h.gf + a.ga) / 2, (a.gf + h.ga) / 2)
         });
       }
     });
 
-  } else {
-
-    const tomorrow = new Date(current);
-    tomorrow.setDate(current.getDate()+1);
-    const tStr = formatDate(tomorrow);
-
-    wc2026.forEach(m=>{
-      const d = formatDate(m.MatchDate);
-      if (!d) return;
-
-      if (d === tStr) {
-
-        const h=getStats(m.HomeTeam,played);
-        const a=getStats(m.AwayTeam,played);
-
-        matches.push({
-          home:m.HomeTeam,
-          away:m.AwayTeam,
-          bets:calculate((h.gf+a.ga)/2,(a.gf+h.ga)/2)
-        });
-      }
-    });
+    return matches;
   }
+
+  // ============================
+  // ✅ PRODUZIONE
+  // ============================
+  const current = new Date();
+  const tomorrow = new Date(current);
+  tomorrow.setDate(current.getDate() + 1);
+
+  const tStr = formatDate(tomorrow);
+
+  wc2026.forEach(m => {
+
+    const d = formatDate(m.MatchDate);
+    if (!d) return;
+
+    if (d === tStr) {
+
+      const h = getStats(m.HomeTeam, played);
+      const a = getStats(m.AwayTeam, played);
+
+      matches.push({
+        home: m.HomeTeam,
+        away: m.AwayTeam,
+        bets: calculate((h.gf + a.ga) / 2, (a.gf + h.ga) / 2)
+      });
+    }
+  });
 
   return matches;
 }
