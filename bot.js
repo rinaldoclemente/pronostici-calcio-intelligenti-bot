@@ -4,6 +4,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
+// ✅ TEST MODE
 const TEST_MODE = process.env.TEST_MODE === "true";
 
 // =============================
@@ -30,17 +31,7 @@ async function sendToAll(text) {
 }
 
 // =============================
-// ✅ DATE SAFE
-// =============================
-function formatDate(d) {
-  if (!d) return null;
-  const date = new Date(d);
-  if (isNaN(date)) return null;
-  return date.toISOString().split("T")[0];
-}
-
-// =============================
-// ✅ POISSON + STATS
+// ✅ POISSON
 // =============================
 function poisson(l, k) {
   let fact = 1;
@@ -48,6 +39,9 @@ function poisson(l, k) {
   return (Math.pow(l, k) * Math.exp(-l)) / fact;
 }
 
+// =============================
+// ✅ STATS
+// =============================
 function getStats(team, matches) {
   const games = matches.filter(m => m.home === team || m.away === team);
 
@@ -102,21 +96,21 @@ function calculate(lambdaH, lambdaA) {
     bets.push({label:l,pct:p});
   });
 
-  // ✅ combo smart
+  // ✅ combo realistiche
   ["1","X","2"].forEach(r=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${r} + ${t}`, pct:base[r]*base[t]});
+      bets.push({label:`${r} + ${t}`,pct:base[r]*base[t]});
     });
   });
 
   ["1X","X2"].forEach(dc=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
-      bets.push({label:`${dc} + ${t}`, pct:base[dc]*base[t]});
+      bets.push({label:`${dc} + ${t}`,pct:base[dc]*base[t]});
     });
   });
 
   ["O1.5","O2.5"].forEach(t=>{
-    bets.push({label:`BTTS + ${t}`, pct:base["BTTS"]*base[t]});
+    bets.push({label:`BTTS + ${t}`,pct:base["BTTS"]*base[t]});
   });
 
   bets = bets.filter(b=>b.pct>0.40 && b.pct<0.85);
@@ -130,50 +124,18 @@ function calculate(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ BOMBA (LOGICA CORRETTA)
-// =============================
-function buildBomb(matches, title) {
-
-  let used = new Set();
-  let selected = [];
-
-  for (const m of matches) {
-
-    if (used.has(m.home) || used.has(m.away)) continue;
-
-    used.add(m.home);
-    used.add(m.away);
-
-    selected.push(m);
-
-    // ✅ max 24 partite (48 squadre)
-    if (selected.length >= 24) break;
-  }
-
-  if (selected.length === 0) return null;
-
-  let msg = `💣 ${title} 💣\n\n`;
-
-  selected.forEach(m=>{
-    msg += `${m.home} - ${m.away}\n`;
-    msg += `✅ ${m.bets[0]?.label}\n`;
-    msg += `⚖️ ${m.bets[1]?.label}\n\n`;
-  });
-
-  return msg;
-}
-
-// =============================
 // ✅ LOAD WORLD CUP
 // =============================
 async function loadWorldCup() {
 
+  // ✅ calendario ufficiale
   const schedule = await (await fetch(
     "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
   )).json();
 
   const fixtures = schedule.matches;
 
+  // ✅ statistiche storiche
   const statUrls = [
     "fifa-world-cup-2022",
     "fifa-world-cup-2018",
@@ -183,15 +145,16 @@ async function loadWorldCup() {
   let played = [];
 
   for (const slug of statUrls) {
+
     const json = await (await fetch(BASE_URL + slug)).json();
 
-    json.forEach(r=>{
-      if(r.HomeTeamScore !== null){
+    json.forEach(r => {
+      if (r.HomeTeamScore !== null) {
         played.push({
-          home:r.HomeTeam,
-          away:r.AwayTeam,
-          hg:r.HomeTeamScore,
-          ag:r.AwayTeamScore
+          home: r.HomeTeam,
+          away: r.AwayTeam,
+          hg: r.HomeTeamScore,
+          ag: r.AwayTeamScore
         });
       }
     });
@@ -199,10 +162,50 @@ async function loadWorldCup() {
 
   let matches = [];
 
-  fixtures.forEach(m=>{
+  // =============================
+  // ✅ TEST MODE
+  // =============================
+  if (TEST_MODE) {
+
+    // prime 5 giornate reali
+    const matchdays = [...new Set(fixtures.map(m => m.round))].slice(0, 5);
+
+    fixtures.forEach(m => {
+
+      // evita placeholder tipo W101
+      if (!m.team1 || !m.team2) return;
+      if (m.team1.includes("W") || m.team2.includes("W")) return;
+
+      if (!matchdays.includes(m.round)) return;
+
+      const h = getStats(m.team1, played);
+      const a = getStats(m.team2, played);
+
+      matches.push({
+        home: m.team1,
+        away: m.team2,
+        bets: calculate((h.gf + a.ga)/2,(a.gf + h.ga)/2)
+      });
+    });
+
+    return matches;
+  }
+
+  // =============================
+  // ✅ PRODUZIONE
+  // =============================
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  const tStr = tomorrow.toISOString().split("T")[0];
+
+  fixtures.forEach(m => {
 
     if (!m.team1 || !m.team2) return;
     if (m.team1.includes("W") || m.team2.includes("W")) return;
+
+    if (m.date !== tStr) return;
 
     const h = getStats(m.team1, played);
     const a = getStats(m.team2, played);
@@ -210,9 +213,7 @@ async function loadWorldCup() {
     matches.push({
       home: m.team1,
       away: m.team2,
-      round: m.round,
-      date: m.date,
-      bets: calculate((h.gf+a.ga)/2,(a.gf+h.ga)/2)
+      bets: calculate((h.gf + a.ga)/2,(a.gf + h.ga)/2)
     });
   });
 
@@ -220,7 +221,7 @@ async function loadWorldCup() {
 }
 
 // =============================
-// ✅ MESSAGE BASE
+// ✅ MESSAGE
 // =============================
 function buildMessage(matches,title){
 
@@ -243,56 +244,15 @@ async function run(){
 
   const matches = await loadWorldCup();
 
-  if (matches.length === 0 && !TEST_MODE) return;
+  // ✅ niente invio se vuoto (produzione)
+  if (!TEST_MODE && matches.length === 0) return;
 
-  const today = new Date();
-  const todayStr = formatDate(today);
+  const title = TEST_MODE
+    ? "WORLD CUP TEST"
+    : "WORLD CUP - DOMANI";
 
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  const tomorrowStr = formatDate(tomorrow);
-
-  // =============================
-  // ✅ DOMANI
-  // =============================
-  const tomorrowMatches = matches.filter(m => m.date === tomorrowStr);
-
-  if (tomorrowMatches.length > 0) {
-    await sendToAll(buildMessage(tomorrowMatches, "WORLD CUP - DOMANI"));
-  }
-
-  // =============================
-  // ✅ BOMBA GIORNATA
-  // =============================
-  const rounds = [...new Set(matches.map(m => m.round))];
-
-  for (const round of rounds) {
-
-    const roundMatches = matches.filter(m => m.round === round);
-
-    const start = roundMatches.map(m => m.date).sort()[0];
-
-    // ✅ giorno prima
-    if (start === tomorrowStr) {
-      const bomb = buildBomb(roundMatches, `BOMBA ${round.toUpperCase()}`);
-      if (bomb) await sendToAll(bomb);
-    }
-  }
-
-  // =============================
-  // ✅ TEST PRIMA GIORNATA (MANUALE)
-  // =============================
-  if (TEST_MODE) {
-
-    const firstRound = rounds[0];
-    const firstMatches = matches.filter(m => m.round === firstRound);
-
-    const bomb = buildBomb(firstMatches, `TEST BOMBA ${firstRound.toUpperCase()}`);
-
-    if (bomb) {
-      await sendToAll(bomb);
-    }
-  }
+  await sendToAll(buildMessage(matches,title));
 }
 
 run();
+``
