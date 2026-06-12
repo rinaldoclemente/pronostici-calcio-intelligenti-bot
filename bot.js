@@ -30,7 +30,7 @@ async function sendToAll(text) {
 }
 
 // =============================
-// ✅ UTILS DATE
+// ✅ DATE SAFE
 // =============================
 function formatDate(d) {
   if (!d) return null;
@@ -63,7 +63,7 @@ function getStats(team, matches) {
 }
 
 // =============================
-// ✅ CALCOLO
+// ✅ CALCOLO PRONOSTICI
 // =============================
 function calculate(lambdaH, lambdaA) {
 
@@ -102,6 +102,7 @@ function calculate(lambdaH, lambdaA) {
     bets.push({label:l,pct:p});
   });
 
+  // ✅ combo smart
   ["1","X","2"].forEach(r=>{
     ["O1.5","O2.5","U3.5"].forEach(t=>{
       bets.push({label:`${r} + ${t}`, pct:base[r]*base[t]});
@@ -129,7 +130,7 @@ function calculate(lambdaH, lambdaA) {
 }
 
 // =============================
-// ✅ BOMBA
+// ✅ BOMBA (LOGICA CORRETTA)
 // =============================
 function buildBomb(matches, title) {
 
@@ -144,6 +145,9 @@ function buildBomb(matches, title) {
     used.add(m.away);
 
     selected.push(m);
+
+    // ✅ max 24 partite (48 squadre)
+    if (selected.length >= 24) break;
   }
 
   if (selected.length === 0) return null;
@@ -216,6 +220,23 @@ async function loadWorldCup() {
 }
 
 // =============================
+// ✅ MESSAGE BASE
+// =============================
+function buildMessage(matches,title){
+
+  let msg = `🔥 ${title} 🔥\n\n`;
+
+  matches.slice(0,10).forEach(m=>{
+    msg += `${m.home} - ${m.away}\n`;
+    msg += `✅ ${m.bets[0]?.label}\n`;
+    msg += `⚖️ ${m.bets[1]?.label}\n`;
+    msg += `🔥 ${m.bets[2]?.label}\n\n`;
+  });
+
+  return msg;
+}
+
+// =============================
 // ✅ MAIN
 // =============================
 async function run(){
@@ -232,7 +253,7 @@ async function run(){
   const tomorrowStr = formatDate(tomorrow);
 
   // =============================
-  // ✅ PARTITE DOMANI
+  // ✅ DOMANI
   // =============================
   const tomorrowMatches = matches.filter(m => m.date === tomorrowStr);
 
@@ -241,68 +262,37 @@ async function run(){
   }
 
   // =============================
-  // ✅ BOMBA GIORNATA (STANDARD)
+  // ✅ BOMBA GIORNATA
   // =============================
-
   const rounds = [...new Set(matches.map(m => m.round))];
 
   for (const round of rounds) {
 
     const roundMatches = matches.filter(m => m.round === round);
 
-    const dates = roundMatches.map(m => m.date);
-    const start = dates.sort()[0];
+    const start = roundMatches.map(m => m.date).sort()[0];
 
-    // ✅ giorno prima giornata
+    // ✅ giorno prima
     if (start === tomorrowStr) {
       const bomb = buildBomb(roundMatches, `BOMBA ${round.toUpperCase()}`);
       if (bomb) await sendToAll(bomb);
     }
-
-    // =============================
-    // ✅ GIORNATA GIÀ INIZIATA 🔥
-    // =============================
-
-    if (start < todayStr) {
-
-      // partite non ancora giocate
-      const remaining = roundMatches.filter(m => m.date >= todayStr);
-
-      if (remaining.length > 0) {
-
-        const bomb = buildBomb(
-          remaining,
-          `BOMBA ${round.toUpperCase()} (RESTANTI)`
-        );
-
-        if (bomb) await sendToAll(bomb);
-      }
-    }
   }
 
   // =============================
-  // ✅ TEST MODE
+  // ✅ TEST PRIMA GIORNATA (MANUALE)
   // =============================
   if (TEST_MODE) {
-    await sendToAll(buildMessage(matches, "WORLD CUP TEST"));
+
+    const firstRound = rounds[0];
+    const firstMatches = matches.filter(m => m.round === firstRound);
+
+    const bomb = buildBomb(firstMatches, `TEST BOMBA ${firstRound.toUpperCase()}`);
+
+    if (bomb) {
+      await sendToAll(bomb);
+    }
   }
-}
-
-// =============================
-// ✅ MESSAGE BASE
-// =============================
-function buildMessage(matches,title){
-
-  let msg = `🔥 ${title} 🔥\n\n`;
-
-  matches.slice(0,10).forEach(m=>{
-    msg += `${m.home} - ${m.away}\n`;
-    msg += `✅ ${m.bets[0]?.label}\n`;
-    msg += `⚖️ ${m.bets[1]?.label}\n`;
-    msg += `🔥 ${m.bets[2]?.label}\n\n`;
-  });
-
-  return msg;
 }
 
 run();
