@@ -6,7 +6,7 @@ on:
     - cron: "0 10 * * *"
 
     # ⚽ Campionati → ogni venerdì alle 10:00
-    - cron: "0 10 * * 5"
+    # cron: "0 10 * * 5"
 
   workflow_dispatch:
     inputs:
