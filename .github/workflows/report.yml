@@ -2,8 +2,7 @@ name: Invio statistiche passate
 
 on:
   schedule:
-    # Mercoledì ore 08:00 italiane circa
-    # (06:00 UTC durante l'ora legale)
+    # Mercoledì ore 08:00 italiane circa durante ora legale
     - cron: "0 6 * * 3"
 
   workflow_dispatch:
