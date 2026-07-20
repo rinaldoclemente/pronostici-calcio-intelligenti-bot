@@ -6,7 +6,7 @@ import fs from "fs";
 const TOKEN = process.env.BOT_TOKEN;
 
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN mancante. Configuralo nei GitHub Secrets.");
+  console.error("BOT_TOKEN mancante. Configuralo nei GitHub Secrets.");
   process.exit(1);
 }
 
@@ -14,18 +14,18 @@ const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
 
 const LEAGUES = [
-  { name: "SERIE A", flag: "🇮🇹", slug: "serie-a-2025" },
-  { name: "PREMIER LEAGUE", flag: "🇬🇧", slug: "epl-2025" },
-  { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga-2025" },
-  { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga-2025" },
-  { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1-2025" },
-  { name: "EREDIVISIE", flag: "🇳🇱", slug: "eredivisie-2025" }
+  { name: "SERIE A", flag: "🇮🇹", slug: "serie-a" },
+  { name: "PREMIER LEAGUE", flag: "🇬🇧", slug: "epl" },
+  { name: "BUNDESLIGA", flag: "🇩🇪", slug: "bundesliga" },
+  { name: "LA LIGA", flag: "🇪🇸", slug: "la-liga" },
+  { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1" },
+  { name: "EREDIVISIE", flag: "🇳🇱", slug: "eredivisie" }
 ];
 
+const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
+const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
 const TEAM_FORM_N = Number(process.env.TEAM_FORM_N || 10);
 const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
-const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
-const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
 
 const TELEGRAM_LIMIT = 3000;
 const MESSAGE_DELAY_MS = Number(process.env.MESSAGE_DELAY_MS || 2500);
@@ -41,13 +41,13 @@ function loadUsers() {
     const users = JSON.parse(raw);
 
     if (!Array.isArray(users)) {
-      console.error("❌ users.json deve essere un array.");
+      console.error("users.json deve essere un array.");
       return [];
     }
 
     return users.map(String).filter(Boolean);
   } catch (err) {
-    console.error("❌ Errore lettura users.json:", err.message);
+    console.error("Errore lettura users.json:", err.message);
     return [];
   }
 }
@@ -75,7 +75,82 @@ function parseDateValue(value) {
   if (!hasTimezone) s += "Z";
 
   const d = new Date(s);
+
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function getDateKeyInTimezone(date, timeZone = TIMEZONE) {
+  if (!date || Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const map = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function getLocalDateInfo(date = new Date(), timeZone = TIMEZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const map = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+
+  const weekdayMap = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6
+  };
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    weekday: weekdayMap[map.weekday]
+  };
+}
+
+function getPreviousWeekendKeys(referenceDate = new Date()) {
+  const info = getLocalDateInfo(referenceDate, TIMEZONE);
+
+  const localMidnightAsUtc = Date.UTC(
+    info.year,
+    info.month - 1,
+    info.day
+  );
+
+  const MS_DAY = 24 * 60 * 60 * 1000;
+
+  const lastSunday = localMidnightAsUtc - info.weekday * MS_DAY;
+  const lastSaturday = lastSunday - MS_DAY;
+
+  const saturdayKey = new Date(lastSaturday).toISOString().split("T")[0];
+  const sundayKey = new Date(lastSunday).toISOString().split("T")[0];
+
+  return {
+    saturdayKey,
+    sundayKey,
+    keys: new Set([saturdayKey, sundayKey])
+  };
 }
 
 function formatDateIT(dateUtc) {
@@ -130,6 +205,27 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS)
   }
 }
 
+async function fetchJsonWithTimeout(url) {
+  const res = await fetchWithTimeout(
+    url,
+    {
+      headers: { "User-Agent": "RinaldoScoutReportBot/1.0" }
+    },
+    FETCH_TIMEOUT_MS
+  );
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+
+  return await res.json();
+}
+
+function getSeasonYear(referenceDate = new Date()) {
+  const info = getLocalDateInfo(referenceDate, TIMEZONE);
+  return info.month >= 8 ? info.year : info.year - 1;
+}
+
 // ======================================================
 // TELEGRAM
 // ======================================================
@@ -162,7 +258,6 @@ async function sendTelegramRaw(chatId, text) {
   );
 
   const body = await res.text();
-  console.log(`📨 Telegram response ${chatId}: ${body}`);
 
   if (!res.ok) {
     const err = new Error(`Telegram ${res.status}: ${body}`);
@@ -180,23 +275,20 @@ async function sendTelegramWithRetry(chatId, text, label = "messaggio") {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(`📤 Invio "${label}" a ${chatId}, tentativo ${attempt}`);
+      console.log(`Invio "${label}" a ${chatId}, tentativo ${attempt}`);
       await sendTelegramRaw(chatId, text);
       return true;
     } catch (err) {
-      console.error(`❌ Errore invio "${label}" a ${chatId}:`, err.message);
+      console.error(`Errore invio "${label}" a ${chatId}:`, err.message);
 
       if (err.status === 429) {
         const waitSec = err.retryAfter || 10;
-        console.log(`⏳ Rate limit Telegram. Attendo ${waitSec + 2}s...`);
         await sleep((waitSec + 2) * 1000);
         continue;
       }
 
       if (attempt < maxAttempts) {
-        const wait = 3000 * attempt;
-        console.log(`⏳ Riprovo tra ${wait}ms...`);
-        await sleep(wait);
+        await sleep(3000 * attempt);
         continue;
       }
 
@@ -209,14 +301,13 @@ async function sendTelegramWithRetry(chatId, text, label = "messaggio") {
 
 async function sendOneLogicalMessage(chatId, text, title) {
   const chunks = splitMessage(text);
-  console.log(`📦 "${title}" diviso in ${chunks.length} parte/i`);
 
   let allOk = true;
 
   for (let i = 0; i < chunks.length; i++) {
     const prefix =
       chunks.length > 1
-        ? `📄 ${title} — Parte ${i + 1}/${chunks.length}\n\n`
+        ? `📄 ${title} - Parte ${i + 1}/${chunks.length}\n\n`
         : "";
 
     const ok = await sendTelegramWithRetry(
@@ -226,6 +317,7 @@ async function sendOneLogicalMessage(chatId, text, title) {
     );
 
     if (!ok) allOk = false;
+
     await sleep(MESSAGE_DELAY_MS);
   }
 
@@ -236,56 +328,27 @@ async function broadcastAllMessages(messages) {
   const users = loadUsers();
 
   if (!users.length) {
-    console.log("⚠️ Nessun utente in users.json.");
+    console.log("Nessun utente in users.json.");
     return;
   }
 
-  console.log(`👥 Utenti: ${users.length}`);
-  console.log(`📨 Messaggi da inviare a ogni utente: ${messages.length}`);
-
   for (const chatId of users) {
-    console.log(`\n🚀 Inizio invio report a ${chatId}`);
-
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      console.log(`➡️ Invio ${i + 1}/${messages.length}: ${msg.title}`);
-      console.log(`📏 Lunghezza: ${msg.text.length} caratteri`);
 
-      const ok = await sendOneLogicalMessage(chatId, msg.text, msg.title);
-
-      if (!ok) {
-        console.error(`⚠️ Invio non completato per: ${msg.title}`);
-      }
-
+      await sendOneLogicalMessage(chatId, msg.text, msg.title);
       await sleep(MESSAGE_DELAY_MS);
     }
-
-    console.log(`✅ Fine invio report a ${chatId}`);
   }
-}
-
-// ======================================================
-// FETCH DATI CAMPIONATI
-// ======================================================
-async function fetchJsonWithTimeout(url) {
-  const res = await fetchWithTimeout(
-    url,
-    {
-      headers: { "User-Agent": "RinaldoScoutReportBot/1.0" }
-    },
-    FETCH_TIMEOUT_MS
-  );
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-
-  return await res.json();
 }
 
 // ======================================================
 // PARSE FIXTURES
 // ======================================================
+function getMatchDateRaw(r) {
+  return r.DateUtc || r.MatchDate || r.Date || "";
+}
+
 function parseFixtureData(json, league) {
   const played = [];
 
@@ -307,7 +370,7 @@ function parseFixtureData(json, league) {
       flag: league.flag,
       slug: league.slug,
       round: Number(r.RoundNumber || 0),
-      dateUtc: r.DateUtc || "",
+      dateUtc: getMatchDateRaw(r),
       home: safeText(r.HomeTeam),
       away: safeText(r.AwayTeam),
       hg: Number(r.HomeTeamScore),
@@ -325,7 +388,50 @@ function parseFixtureData(json, league) {
 }
 
 // ======================================================
-// MODELLO POISSON — stessa logica del bot venerdì
+// PROFILO NEOPROMOSSE
+// ======================================================
+function computeSurvivalProfile(previousMatches) {
+  const teams = {};
+
+  previousMatches.forEach(m => {
+    if (!teams[m.home]) teams[m.home] = { p: 0, gf: 0, ga: 0, pts: 0 };
+    if (!teams[m.away]) teams[m.away] = { p: 0, gf: 0, ga: 0, pts: 0 };
+
+    teams[m.home].p++;
+    teams[m.home].gf += m.hg;
+    teams[m.home].ga += m.ag;
+
+    teams[m.away].p++;
+    teams[m.away].gf += m.ag;
+    teams[m.away].ga += m.hg;
+
+    if (m.hg > m.ag) teams[m.home].pts += 3;
+    else if (m.hg < m.ag) teams[m.away].pts += 3;
+    else {
+      teams[m.home].pts += 1;
+      teams[m.away].pts += 1;
+    }
+  });
+
+  const ranked = Object.values(teams)
+    .filter(t => t.p > 0)
+    .sort((a, b) => (a.pts / a.p) - (b.pts / b.p));
+
+  if (!ranked.length) {
+    return { gf: 1.0, ga: 1.6 };
+  }
+
+  const bottomCount = Math.max(3, Math.ceil(ranked.length * 0.2));
+  const bottomTeams = ranked.slice(0, bottomCount);
+
+  return {
+    gf: bottomTeams.reduce((s, t) => s + (t.gf / t.p), 0) / bottomTeams.length || 1.0,
+    ga: bottomTeams.reduce((s, t) => s + (t.ga / t.p), 0) / bottomTeams.length || 1.6
+  };
+}
+
+// ======================================================
+// MODELLO
 // ======================================================
 function poisson(lambda, k) {
   let fact = 1;
@@ -337,241 +443,118 @@ function poisson(lambda, k) {
   return (Math.pow(lambda, k) * Math.exp(-lambda)) / fact;
 }
 
-function leagueAverage(played) {
-  if (!played || !played.length) {
-    return { h: 1.35, a: 1.05 };
+function getStats(team, matches, fallbackProfile) {
+  const games = matches.filter(m => m.home === team || m.away === team);
+
+  if (!games.length) {
+    return fallbackProfile || { gf: 1.0, ga: 1.6 };
   }
 
-  let homeGoals = 0;
-  let awayGoals = 0;
+  const rawGF = games.reduce((sum, m) => {
+    return sum + (m.home === team ? m.hg : m.ag);
+  }, 0) / games.length;
 
-  for (const m of played) {
-    homeGoals += m.hg;
-    awayGoals += m.ag;
+  const rawGA = games.reduce((sum, m) => {
+    return sum + (m.home === team ? m.ag : m.hg);
+  }, 0) / games.length;
+
+  if (games.length < 5 && fallbackProfile) {
+    const realWeight = games.length / 5;
+    const fallbackWeight = 1 - realWeight;
+
+    return {
+      gf: rawGF * realWeight + fallbackProfile.gf * fallbackWeight,
+      ga: rawGA * realWeight + fallbackProfile.ga * fallbackWeight
+    };
   }
 
   return {
-    h: homeGoals / played.length || 1.35,
-    a: awayGoals / played.length || 1.05
+    gf: rawGF,
+    ga: rawGA
   };
 }
 
-function teamStats(team, role, n, played) {
-  const games = played
-    .filter(m => {
-      if (role === "home") return m.home === team;
-      if (role === "away") return m.away === team;
-      return m.home === team || m.away === team;
-    })
-    .slice(-n);
-
-  if (!games.length) return null;
-
-  let gf = 0;
-  let ga = 0;
-  let pts = 0;
-  let wins = 0;
-  let draws = 0;
-  let losses = 0;
-  let cs = 0;
-  let btts = 0;
-  let o25 = 0;
-
-  for (const m of games) {
-    const isHome = m.home === team;
-    const mygf = isHome ? m.hg : m.ag;
-    const myga = isHome ? m.ag : m.hg;
-
-    gf += mygf;
-    ga += myga;
-
-    if (mygf > myga) {
-      pts += 3;
-      wins++;
-    } else if (mygf === myga) {
-      pts += 1;
-      draws++;
-    } else {
-      losses++;
-    }
-
-    if (myga === 0) cs++;
-    if (mygf > 0 && myga > 0) btts++;
-    if (mygf + myga > 2) o25++;
-  }
-
-  const total = games.length;
-
-  return {
-    n: total,
-    gf: gf / total,
-    ga: ga / total,
-    pts: pts / total,
-    wins: wins / total * 100,
-    draws: draws / total * 100,
-    losses: losses / total * 100,
-    cs: cs / total * 100,
-    btts: btts / total * 100,
-    o25: o25 / total * 100
-  };
-}
-
-function calculateMatch(sH, sA, av) {
-  const homeAvg = av.h || 1.35;
-  const awayAvg = av.a || 1.05;
-
-  const lambdaHomeRaw = Math.max(
-    0.2,
-    (sH.gf / homeAvg) * (sA.ga / awayAvg) * homeAvg
-  );
-
-  const lambdaAwayRaw = Math.max(
-    0.2,
-    (sA.gf / awayAvg) * (sH.ga / homeAvg) * awayAvg
-  );
-
-  const adjustByPoints = p => {
-    return (p / 3 - 0.333) * 0.18 + 1;
-  };
-
-  const lambdaH = Math.max(0.1, lambdaHomeRaw * adjustByPoints(sH.pts));
-  const lambdaA = Math.max(0.1, lambdaAwayRaw * adjustByPoints(sA.pts));
-
-  const maxGoals = 6;
-  const matrix = [];
-
+function calculate(lambdaH, lambdaA) {
   let pH = 0;
   let pD = 0;
   let pA = 0;
-  let mass = 0;
+  let over15 = 0;
+  let over25 = 0;
+  let under25 = 0;
+  let under35 = 0;
+  let btts = 0;
 
-  for (let i = 0; i <= maxGoals; i++) {
-    matrix[i] = [];
-
-    for (let j = 0; j <= maxGoals; j++) {
+  for (let i = 0; i <= 5; i++) {
+    for (let j = 0; j <= 5; j++) {
       const p = poisson(lambdaH, i) * poisson(lambdaA, j);
-
-      matrix[i][j] = p;
-      mass += p;
 
       if (i > j) pH += p;
       else if (i === j) pD += p;
       else pA += p;
+
+      if (i + j > 1) over15 += p;
+      if (i + j > 2) over25 += p;
+
+      if (i + j < 3) under25 += p;
+      if (i + j < 4) under35 += p;
+
+      if (i > 0 && j > 0) btts += p;
     }
   }
 
-  const total = pH + pD + pA || 1;
-
-  return {
-    lambdaH,
-    lambdaA,
-    pH: pH / total,
-    pD: pD / total,
-    pA: pA / total,
-    matrix,
-    mass
+  const base = {
+    "1": pH,
+    "X": pD,
+    "2": pA,
+    "1X": pH + pD,
+    "X2": pD + pA,
+    "O1.5": over15,
+    "O2.5": over25,
+    "U2.5": under25,
+    "U3.5": under35,
+    "BTTS": btts
   };
-}
 
-function calcQuota(pct) {
-  if (!pct || pct <= 2) return null;
+  let bets = [];
 
-  const raw = 1 / (pct / 100);
+  Object.entries(base).forEach(([label, pct]) => {
+    bets.push({ label, pct });
+  });
 
-  let margin;
-  if (raw < 1.5) margin = 0.06;
-  else if (raw < 2.5) margin = 0.08;
-  else if (raw < 4) margin = 0.10;
-  else margin = 0.12;
+  ["1", "X", "2"].forEach(result => {
+    ["O1.5", "O2.5", "U2.5", "U3.5"].forEach(total => {
+      bets.push({
+        label: `${result} + ${total}`,
+        pct: base[result] * base[total]
+      });
+    });
+  });
 
-  return Math.max(
-    1.01,
-    Math.round(raw * (1 - margin) * 20) / 20
-  );
-}
+  ["1X", "X2"].forEach(dc => {
+    ["O1.5", "O2.5", "U2.5", "U3.5"].forEach(total => {
+      bets.push({
+        label: `${dc} + ${total}`,
+        pct: base[dc] * base[total]
+      });
+    });
+  });
 
-function buildBets(home, away, res) {
-  const sp = res.matrix;
-  const maxG = 6;
-  const mass = res.mass || 1;
+  ["O1.5", "O2.5"].forEach(total => {
+    bets.push({
+      label: `BTTS + ${total}`,
+      pct: base["BTTS"] * base[total]
+    });
+  });
 
-  function acc(fn) {
-    let sum = 0;
-
-    for (let i = 0; i <= maxG; i++) {
-      for (let j = 0; j <= maxG; j++) {
-        if (fn(i, j)) sum += sp[i][j];
-      }
-    }
-
-    return sum / mass;
-  }
-
-  const raw = [
-    { label: "1", pct: res.pH },
-    { label: "X", pct: res.pD },
-    { label: "2", pct: res.pA },
-
-    { label: "1X", pct: res.pH + res.pD },
-    { label: "X2", pct: res.pD + res.pA },
-    { label: "12", pct: res.pH + res.pA },
-
-    { label: "Over 1.5", pct: acc((i, j) => i + j > 1) },
-    { label: "Over 2.5", pct: acc((i, j) => i + j > 2) },
-    { label: "Over 3.5", pct: acc((i, j) => i + j > 3) },
-
-    { label: "Under 2.5", pct: acc((i, j) => i + j <= 2) },
-    { label: "Under 3.5", pct: acc((i, j) => i + j <= 3) },
-
-    { label: "BTTS Sì", pct: acc((i, j) => i > 0 && j > 0) },
-    { label: "BTTS No", pct: acc((i, j) => !(i > 0 && j > 0)) },
-
-    { label: `${home} segna`, pct: acc((i, j) => i >= 1) },
-    { label: `${away} segna`, pct: acc((i, j) => j >= 1) },
-
-    { label: "Multigol 1-3", pct: acc((i, j) => i + j >= 1 && i + j <= 3) },
-    { label: "Multigol 2-3", pct: acc((i, j) => i + j >= 2 && i + j <= 3) },
-    { label: "Multigol 1-4", pct: acc((i, j) => i + j >= 1 && i + j <= 4) },
-
-    { label: "1 + Over 1.5", pct: acc((i, j) => i > j && i + j > 1) },
-    { label: "1 + Over 2.5", pct: acc((i, j) => i > j && i + j > 2) },
-    { label: "2 + Over 1.5", pct: acc((i, j) => j > i && i + j > 1) },
-    { label: "2 + Over 2.5", pct: acc((i, j) => j > i && i + j > 2) },
-
-    { label: "X + Under 2.5", pct: acc((i, j) => i === j && i + j <= 2) },
-    { label: "BTTS + Over 2.5", pct: acc((i, j) => i > 0 && j > 0 && i + j > 2) },
-
-    { label: "1X + Over 1.5", pct: acc((i, j) => i >= j && i + j > 1) },
-    { label: "1X + Under 3.5", pct: acc((i, j) => i >= j && i + j <= 3) },
-    { label: "X2 + Over 1.5", pct: acc((i, j) => j >= i && i + j > 1) },
-    { label: "X2 + Under 3.5", pct: acc((i, j) => j >= i && i + j <= 3) }
-  ];
-
-  const bets = raw
-    .map(b => {
-      const pct = Math.round(b.pct * 100);
-      return {
-        label: b.label,
-        pct,
-        quota: calcQuota(pct)
-      };
-    })
-    .filter(b => b.pct >= 40 && b.pct <= 88)
+  bets = bets
+    .filter(b => b.pct > 0.40 && b.pct < 0.85)
     .sort((a, b) => b.pct - a.pct);
 
-  return selectThreeLevels(bets);
-}
+  const safe = bets.find(b => b.pct >= 0.70);
+  const mid = bets.find(b => b.pct < 0.70 && b.pct >= 0.55);
+  const value = bets.find(b => b.pct < 0.55);
 
-function selectThreeLevels(bets) {
-  const result = [];
-
-  const safe = bets.find(b => b.pct >= 70);
-  const mid = bets.find(b => b.pct < 70 && b.pct >= 55);
-  const value = bets.find(b => b.pct < 55 && b.pct >= 40);
-
-  if (safe) result.push(safe);
-  if (mid && !result.some(x => x.label === mid.label)) result.push(mid);
-  if (value && !result.some(x => x.label === value.label)) result.push(value);
+  const result = [safe, mid, value].filter(Boolean);
 
   for (const bet of bets) {
     if (result.length >= 3) break;
@@ -581,9 +564,6 @@ function selectThreeLevels(bets) {
   return result.slice(0, 3);
 }
 
-// ======================================================
-// VERIFICA BET
-// ======================================================
 function checkBet(label, home, away, hg, ag) {
   const total = hg + ag;
   const btts = hg > 0 && ag > 0;
@@ -594,45 +574,26 @@ function checkBet(label, home, away, hg, ag) {
 
   if (label === "1X") return hg >= ag;
   if (label === "X2") return ag >= hg;
-  if (label === "12") return hg !== ag;
 
-  if (label === "Over 1.5") return total > 1;
-  if (label === "Over 2.5") return total > 2;
-  if (label === "Over 3.5") return total > 3;
+  if (label === "O1.5") return total > 1;
+  if (label === "O2.5") return total > 2;
+  if (label === "U2.5") return total <= 2;
+  if (label === "U3.5") return total <= 3;
 
-  if (label === "Under 2.5") return total <= 2;
-  if (label === "Under 3.5") return total <= 3;
+  if (label === "BTTS") return btts;
 
-  if (label === "BTTS Sì") return btts;
-  if (label === "BTTS No") return !btts;
+  const comboParts = label.split(" + ");
 
-  if (label === `${home} segna`) return hg >= 1;
-  if (label === `${away} segna`) return ag >= 1;
-
-  if (label === "Multigol 1-3") return total >= 1 && total <= 3;
-  if (label === "Multigol 2-3") return total >= 2 && total <= 3;
-  if (label === "Multigol 1-4") return total >= 1 && total <= 4;
-
-  if (label === "1 + Over 1.5") return hg > ag && total > 1;
-  if (label === "1 + Over 2.5") return hg > ag && total > 2;
-
-  if (label === "2 + Over 1.5") return ag > hg && total > 1;
-  if (label === "2 + Over 2.5") return ag > hg && total > 2;
-
-  if (label === "X + Under 2.5") return hg === ag && total <= 2;
-  if (label === "BTTS + Over 2.5") return btts && total > 2;
-
-  if (label === "1X + Over 1.5") return hg >= ag && total > 1;
-  if (label === "1X + Under 3.5") return hg >= ag && total <= 3;
-
-  if (label === "X2 + Over 1.5") return ag >= hg && total > 1;
-  if (label === "X2 + Under 3.5") return ag >= hg && total <= 3;
+  if (comboParts.length === 2) {
+    return checkBet(comboParts[0], home, away, hg, ag) &&
+           checkBet(comboParts[1], home, away, hg, ag);
+  }
 
   return null;
 }
 
 // ======================================================
-// ANALISI REPORT
+// STATISTICHE REPORT
 // ======================================================
 function emptyStats() {
   return {
@@ -661,7 +622,7 @@ function pct(ok, tot) {
 }
 
 function statsLine(icon, label, s) {
-  return `${icon} ${label}: ${s.ok}/${s.tot} — ${pct(s.ok, s.tot)}%`;
+  return `${icon} ${label}: ${s.ok}/${s.tot} - ${pct(s.ok, s.tot)}%`;
 }
 
 function formatStatsBlock(stats) {
@@ -673,62 +634,63 @@ function formatStatsBlock(stats) {
   ].join("\n");
 }
 
-function latestRoundMatches(played) {
-  const valid = played.filter(m => Number.isFinite(m.round) && m.round > 0);
-
-  if (!valid.length) return [];
-
-  const maxRound = Math.max(...valid.map(m => m.round));
-  return valid.filter(m => m.round === maxRound);
-}
-
-async function analyzeLeagueReport(league) {
+// ======================================================
+// ANALISI CAMPIONATO
+// ======================================================
+async function analyzeLeagueReport(league, weekendKeys) {
   const result = {
     league,
-    status: "pending",
-    round: null,
     matches: [],
     stats: emptyStats(),
+    totalWeekendMatches: 0,
     error: null
   };
 
   try {
-    console.log(`\n📥 Report: carico ${league.name}`);
+    const seasonYear = getSeasonYear();
+    const previousSeasonYear = seasonYear - 1;
 
-    const json = await fetchJsonWithTimeout(BASE_URL + league.slug);
+    const currentSlug = `${league.slug}-${seasonYear}`;
+    const previousSlug = `${league.slug}-${previousSeasonYear}`;
 
-    if (!Array.isArray(json) || !json.length) {
-      result.status = "empty";
-      result.error = "Feed vuoto";
-      return result;
+    const currentJson = await fetchJsonWithTimeout(BASE_URL + currentSlug);
+    let previousJson = [];
+
+    try {
+      previousJson = await fetchJsonWithTimeout(BASE_URL + previousSlug);
+    } catch {
+      previousJson = [];
     }
 
-    const played = parseFixtureData(json, league);
+    const currentPlayed = parseFixtureData(currentJson, {
+      ...league,
+      slug: currentSlug
+    });
 
-    if (!played.length) {
-      result.status = "no_played";
-      result.error = "Nessuna partita giocata";
-      return result;
-    }
+    const previousPlayed = parseFixtureData(previousJson, {
+      ...league,
+      slug: previousSlug
+    });
 
-    const targetMatches = latestRoundMatches(played);
+    const survivalProfile = computeSurvivalProfile(previousPlayed);
+    const allPlayed = previousPlayed.concat(currentPlayed);
+
+    const targetMatches = currentPlayed.filter(m => {
+      const d = parseDateValue(m.dateUtc);
+      const key = getDateKeyInTimezone(d, TIMEZONE);
+      return weekendKeys.has(key);
+    });
+
+    result.totalWeekendMatches = targetMatches.length;
 
     if (!targetMatches.length) {
-      result.status = "no_round";
-      result.error = "Nessuna ultima giornata trovata";
       return result;
     }
-
-    result.round = targetMatches[0]?.round || null;
-
-    console.log(
-      `🎯 ${league.name}: ultima giornata giocata=${result.round}, partite=${targetMatches.length}`
-    );
 
     for (const m of targetMatches) {
       const matchDate = parseDateValue(m.dateUtc);
 
-      const previousPlayed = played.filter(p => {
+      const previousForMatch = allPlayed.filter(p => {
         if (p === m) return false;
 
         const pDate = parseDateValue(p.dateUtc);
@@ -737,42 +699,25 @@ async function analyzeLeagueReport(league) {
           return pDate.getTime() < matchDate.getTime();
         }
 
-        // fallback se mancano date: usa round precedente
-        return p.round < m.round;
+        return false;
       });
 
-      if (previousPlayed.length < 5) {
-        console.log(`⚠️ Dati precedenti insufficienti: ${m.home} - ${m.away}`);
-        continue;
-      }
+      const h = getStats(m.home, previousForMatch, survivalProfile);
+      const a = getStats(m.away, previousForMatch, survivalProfile);
 
-      const sH =
-        teamStats(m.home, "home", TEAM_FORM_N, previousPlayed) ||
-        teamStats(m.home, "both", TEAM_FORM_N, previousPlayed);
+      const bets = calculate(
+        (h.gf + a.ga) / 2,
+        (a.gf + h.ga) / 2
+      );
 
-      const sA =
-        teamStats(m.away, "away", TEAM_FORM_N, previousPlayed) ||
-        teamStats(m.away, "both", TEAM_FORM_N, previousPlayed);
-
-      if (!sH || !sA) {
-        console.log(`⚠️ Stats insufficienti: ${m.home} - ${m.away}`);
-        continue;
-      }
-
-      const av = leagueAverage(previousPlayed);
-      const model = calculateMatch(sH, sA, av);
-      const bets = buildBets(m.home, m.away, model);
-
-      if (bets.length < 3) {
-        console.log(`⚠️ Meno di 3 picks: ${m.home} - ${m.away}`);
-        continue;
-      }
+      if (bets.length < 3) continue;
 
       const levels = ["safe", "balanced", "value"];
       const icons = ["✅", "⚖️", "🔥"];
 
       const checkedBets = bets.slice(0, 3).map((bet, idx) => {
         const outcome = checkBet(bet.label, m.home, m.away, m.hg, m.ag);
+
         addStat(result.stats, levels[idx], outcome);
 
         return {
@@ -785,52 +730,50 @@ async function analyzeLeagueReport(league) {
 
       result.matches.push({
         ...m,
-        bets: checkedBets,
-        p1: Math.round(model.pH * 100),
-        px: Math.round(model.pD * 100),
-        p2: Math.round(model.pA * 100),
-        xgHome: model.lambdaH,
-        xgAway: model.lambdaA,
-        topScore: `${m.hg}-${m.ag}`
+        bets: checkedBets
       });
     }
 
-    result.status = "ok";
     return result;
   } catch (err) {
-    result.status = "error";
     result.error = err.message;
-    console.error(`❌ Report errore ${league.name}:`, err.message);
     return result;
   }
 }
 
 async function loadReportData() {
+  const { keys, saturdayKey, sundayKey } = getPreviousWeekendKeys();
+
+  console.log(`Weekend precedente: ${saturdayKey}, ${sundayKey}`);
+
   const leagueResults = [];
 
   for (const league of LEAGUES) {
-    const res = await analyzeLeagueReport(league);
+    const res = await analyzeLeagueReport(league, keys);
     leagueResults.push(res);
     await sleep(500);
   }
 
+  const totalWeekendMatches = leagueResults.reduce(
+    (sum, r) => sum + r.totalWeekendMatches,
+    0
+  );
+
   const allMatches = leagueResults.flatMap(r => r.matches);
 
-  console.log(`\n📊 Report totale partite verificate: ${allMatches.length}`);
-
-  return { leagueResults, allMatches };
+  return {
+    leagueResults,
+    allMatches,
+    totalWeekendMatches,
+    saturdayKey,
+    sundayKey
+  };
 }
 
 // ======================================================
 // MESSAGGI REPORT
 // ======================================================
 function resultIcon(outcome) {
-  if (outcome === true) return "✅";
-  if (outcome === false) return "❌";
-  return "?";
-}
-
-function resultIconEmoji(outcome) {
   if (outcome === true) return "✅";
   if (outcome === false) return "❌";
   return "❔";
@@ -850,7 +793,7 @@ function buildTopStats(matches) {
   return stats;
 }
 
-function buildMainReportMessage(allMatches) {
+function buildMainReportMessage(allMatches, saturdayKey, sundayKey) {
   const sorted = [...allMatches].sort((a, b) => {
     const pa = a.bets?.[0]?.pct || 0;
     const pb = b.bets?.[0]?.pct || 0;
@@ -862,17 +805,16 @@ function buildMainReportMessage(allMatches) {
 
   let msg = "";
 
-  msg += "📊 Report risultati — bilancio del weekend\n\n";
-  msg += "Ho ricalcolato il modello sulla giornata appena giocata usando solo i dati disponibili prima di ogni partita.\n";
-  msg += "Qui trovi quali picks sarebbero stati presi e la percentuale di riuscita.\n\n";
+  msg += "📊 Report risultati - weekend precedente\n\n";
+  msg += `Periodo analizzato: ${saturdayKey} / ${sundayKey}\n\n`;
 
   msg += "📌 LEGENDA\n";
-  msg += "✅ Sicura → primo pick del modello\n";
-  msg += "⚖️ Equilibrata → secondo pick\n";
-  msg += "🔥 Value → terzo pick, più aggressivo\n";
+  msg += "✅ Sicura - primo pick del modello\n";
+  msg += "⚖️ Equilibrata - secondo pick\n";
+  msg += "🔥 Value - terzo pick più aggressivo\n\n";
 
   msg += "━━━━━━━━━━━━━━━\n\n";
-  msg += `🏆 TOP ${top.length} VALUE BET — RISULTATI\n\n`;
+  msg += `🏆 TOP ${top.length} PICKS - RISULTATI\n\n`;
   msg += formatStatsBlock(topStats);
   msg += "\n\n";
 
@@ -890,32 +832,29 @@ function buildMainReportMessage(allMatches) {
       msg += `${bet.icon} ${bet.label} ${resultIcon(bet.outcome)}\n`;
     }
 
-    if (SHOW_NUMBERS) {
-      msg += `📈 1X2 stimato: 1 ${m.p1}% · X ${m.px}% · 2 ${m.p2}%\n`;
-      msg += `⚽ xG stimati: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
-    }
-
     msg += "\n";
   }
 
   msg += "━━━━━━━━━━━━━━━\n";
-  msg += "⚠️ Report statistico automatico: misura affidabilità del modello, non garantisce esiti futuri.";
+  msg += "⚠️ Report automatico: misura affidabilità del modello, non garantisce esiti futuri.";
 
   return msg;
 }
 
 function buildLeagueReportMessage(leagueResult) {
-  const { league, matches, stats, status, round, error } = leagueResult;
+  const { league, matches, stats, totalWeekendMatches, error } = leagueResult;
 
   let msg = "";
 
-  msg += `${league.flag} ${league.name} — report risultati`;
-  if (round) msg += ` G${round}`;
-  msg += "\n\n";
+  msg += `${league.flag} ${league.name} - report risultati\n\n`;
+
+  if (!totalWeekendMatches) {
+    msg += "⚠️ Nessuna partita giocata nel weekend precedente.\n";
+    return msg;
+  }
 
   if (!matches.length) {
-    msg += "⚠️ Nessuna partita verificabile per questo campionato.\n";
-    msg += `Stato: ${status}\n`;
+    msg += "⚠️ Partite trovate, ma nessuna verificabile dal modello.\n";
     if (error) msg += `Motivo: ${error}\n`;
     return msg;
   }
@@ -937,18 +876,17 @@ function buildLeagueReportMessage(leagueResult) {
     if (date) msg += `🗓 ${date}\n`;
 
     for (const bet of m.bets.slice(0, 3)) {
-      msg += `${bet.icon} ${bet.label} ${resultIconEmoji(bet.outcome)}\n`;
+      msg += `${bet.icon} ${bet.label} ${resultIcon(bet.outcome)}\n`;
     }
 
     if (SHOW_NUMBERS) {
-      msg += `📈 1X2: 1 ${m.p1}% · X ${m.px}% · 2 ${m.p2}%\n`;
-      msg += `⚽ xG: ${m.xgHome.toFixed(2)} - ${m.xgAway.toFixed(2)}\n`;
+      msg += `📊 Picks calcolate su storico precedente alla partita\n`;
     }
 
     msg += "\n";
   }
 
-  msg += "⚠️ Verifica automatica su ultima giornata giocata.";
+  msg += "⚠️ Verifica automatica sul weekend precedente.";
 
   return msg;
 }
@@ -972,36 +910,31 @@ function buildSummaryReportMessage(leagueResults) {
 
   for (const lr of leagueResults) {
     const total = lr.stats.total;
-    const icon = total.tot ? "✅" : "⚠️";
-    msg += `${icon} ${lr.league.flag} ${lr.league.name}: ${total.ok}/${total.tot} — ${pct(total.ok, total.tot)}%`;
-    if (!total.tot && lr.error) msg += ` (${lr.error})`;
-    msg += "\n";
+    const played = lr.totalWeekendMatches;
+
+    if (!played) {
+      msg += `⚠️ ${lr.league.flag} ${lr.league.name}: nessuna partita\n`;
+    } else {
+      msg += `✅ ${lr.league.flag} ${lr.league.name}: ${total.ok}/${total.tot} - ${pct(total.ok, total.tot)}%\n`;
+    }
   }
 
   return msg;
 }
 
-function buildAllReportMessages(leagueResults, allMatches) {
+function buildAllReportMessages(leagueResults, allMatches, saturdayKey, sundayKey) {
   const messages = [];
 
   messages.push({
     title: "REPORT TOP 10",
-    text: buildMainReportMessage(allMatches)
+    text: buildMainReportMessage(allMatches, saturdayKey, sundayKey)
   });
 
-  for (const league of LEAGUES) {
-    const lr = leagueResults.find(x => x.league.slug === league.slug);
-
-    if (!lr) {
-      messages.push({
-        title: league.name,
-        text: `${league.flag} ${league.name} — report risultati\n\n⚠️ Campionato non processato.`
-      });
-      continue;
-    }
+  for (const lr of leagueResults) {
+    if (!lr.totalWeekendMatches) continue;
 
     messages.push({
-      title: `${league.name} REPORT`,
+      title: `${lr.league.name} REPORT`,
       text: buildLeagueReportMessage(lr)
     });
   }
@@ -1018,32 +951,44 @@ function buildAllReportMessages(leagueResults, allMatches) {
 // MAIN
 // ======================================================
 async function main() {
-  console.log("🚀 Avvio report mercoledì GitHub Actions");
+  console.log("Avvio report mercoledì");
 
   const users = loadUsers();
 
   if (!users.length) {
-    console.log("⚠️ Nessun utente trovato in users.json.");
+    console.log("Nessun utente trovato in users.json.");
     return;
   }
 
-  console.log(`👥 Utenti destinatari: ${users.length}`);
+  const {
+    leagueResults,
+    allMatches,
+    totalWeekendMatches,
+    saturdayKey,
+    sundayKey
+  } = await loadReportData();
 
-  const { leagueResults, allMatches } = await loadReportData();
-  const messages = buildAllReportMessages(leagueResults, allMatches);
+  // Se nel weekend precedente non ci sono state partite,
+  // non invia nulla.
+  if (!totalWeekendMatches) {
+    console.log("Nessuna partita giocata nel weekend precedente. Nessun invio.");
+    return;
+  }
 
-  console.log(`\n📦 Messaggi report generati: ${messages.length}`);
-  messages.forEach((m, idx) => {
-    console.log(`${idx + 1}. ${m.title} — ${m.text.length} caratteri`);
-  });
+  const messages = buildAllReportMessages(
+    leagueResults,
+    allMatches,
+    saturdayKey,
+    sundayKey
+  );
 
   await broadcastAllMessages(messages);
 
-  console.log("✅ Report completato");
+  console.log("Report completato");
 }
 
 main().catch(async err => {
-  console.error("❌ Errore fatale report:", err);
+  console.error("Errore fatale report:", err);
 
   try {
     await broadcastAllMessages([
