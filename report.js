@@ -4,14 +4,19 @@ import fs from "fs";
 // CONFIG
 // ======================================================
 const TOKEN = process.env.BOT_TOKEN;
-
-if (!TOKEN) {
-  console.error("BOT_TOKEN mancante. Configuralo nei GitHub Secrets.");
-  process.exit(1);
-}
-
 const USERS_FILE = "users.json";
 const BASE_URL = "https://fixturedownload.com/feed/json/";
+
+const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
+const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
+const TEAM_FORM_N = Number(process.env.TEAM_FORM_N || 10);
+const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
+
+const MAX_GOALS = 10;
+const TELEGRAM_LIMIT = 3000;
+const MESSAGE_DELAY_MS = Number(process.env.MESSAGE_DELAY_MS || 2500);
+const FETCH_TIMEOUT_MS = 15000;
+const TELEGRAM_TIMEOUT_MS = 20000;
 
 const LEAGUES = [
   { name: "SERIE A", flag: "🇮🇹", slug: "serie-a" },
@@ -21,16 +26,6 @@ const LEAGUES = [
   { name: "LIGUE 1", flag: "🇫🇷", slug: "ligue-1" },
   { name: "EREDIVISIE", flag: "🇳🇱", slug: "eredivisie" }
 ];
-
-const TIMEZONE = process.env.TIMEZONE || "Europe/Rome";
-const SHOW_NUMBERS = process.env.SHOW_NUMBERS === "true";
-const TEAM_FORM_N = Number(process.env.TEAM_FORM_N || 10);
-const TOP_LIMIT = Number(process.env.TOP_LIMIT || 10);
-
-const TELEGRAM_LIMIT = 3000;
-const MESSAGE_DELAY_MS = Number(process.env.MESSAGE_DELAY_MS || 2500);
-const FETCH_TIMEOUT_MS = 15000;
-const TELEGRAM_TIMEOUT_MS = 20000;
 
 // ======================================================
 // USERS
@@ -63,26 +58,72 @@ function safeText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function average(values, fallback = 0) {
+  if (!values.length) return fallback;
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function pct(ok, tot) {
+  if (!tot) return 0;
+
+  return Math.round((ok / tot) * 100);
+}
+
+function probabilityPct(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function pickLabel(bet) {
+  if (!bet) return "N/D";
+
+  if (!SHOW_NUMBERS) return bet.label;
+
+  return `${bet.label} (${probabilityPct(bet.pct)})`;
+}
+
 function parseDateValue(value) {
   if (!value) return null;
 
-  let s = String(value).trim().replace(" ", "T");
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value;
+  }
 
-  const hasTimezone =
-    s.endsWith("Z") ||
-    /[+-]\d{2}:?\d{2}$/.test(s);
+  const raw = String(value).trim();
 
-  if (!hasTimezone) s += "Z";
+  if (!raw) return null;
 
-  const d = new Date(s);
+  const direct = new Date(raw);
 
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (!Number.isNaN(direct.getTime())) {
+    return direct;
+  }
+
+  const italianDateMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+
+  if (italianDateMatch) {
+    const [, dd, mm, yyyy, hh = "12", min = "00"] = italianDateMatch;
+
+    const parsed = new Date(
+      `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}T${hh.padStart(2, "0")}:${min}:00Z`
+    );
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 function getDateKeyInTimezone(date, timeZone = TIMEZONE) {
   if (!date || Number.isNaN(date.getTime())) return null;
 
-  const parts = new Intl.DateTimeFormat("en-GB", {
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
     month: "2-digit",
@@ -90,8 +131,11 @@ function getDateKeyInTimezone(date, timeZone = TIMEZONE) {
   }).formatToParts(date);
 
   const map = {};
+
   for (const p of parts) {
-    if (p.type !== "literal") map[p.type] = p.value;
+    if (p.type !== "literal") {
+      map[p.type] = p.value;
+    }
   }
 
   return `${map.year}-${map.month}-${map.day}`;
@@ -107,8 +151,11 @@ function getLocalDateInfo(date = new Date(), timeZone = TIMEZONE) {
   }).formatToParts(date);
 
   const map = {};
+
   for (const p of parts) {
-    if (p.type !== "literal") map[p.type] = p.value;
+    if (p.type !== "literal") {
+      map[p.type] = p.value;
+    }
   }
 
   const weekdayMap = {
@@ -143,8 +190,11 @@ function getPreviousWeekendKeys(referenceDate = new Date()) {
   const lastSunday = localMidnightAsUtc - info.weekday * MS_DAY;
   const lastSaturday = lastSunday - MS_DAY;
 
-  const saturdayKey = new Date(lastSaturday).toISOString().split("T")[0];
-  const sundayKey = new Date(lastSunday).toISOString().split("T")[0];
+  const saturdayDate = new Date(lastSaturday);
+  const sundayDate = new Date(lastSunday);
+
+  const saturdayKey = saturdayDate.toISOString().split("T")[0];
+  const sundayKey = sundayDate.toISOString().split("T")[0];
 
   return {
     saturdayKey,
@@ -177,17 +227,24 @@ function splitMessage(text, limit = TELEGRAM_LIMIT) {
 
   while (rest.length > limit) {
     let cut = rest.lastIndexOf("\n\n", limit);
+
     if (cut < 800) cut = rest.lastIndexOf("\n", limit);
     if (cut < 800) cut = rest.lastIndexOf(" ", limit);
     if (cut < 800) cut = limit;
 
     const part = rest.slice(0, cut).trim();
-    if (part.length) parts.push(part);
+
+    if (part.length) {
+      parts.push(part);
+    }
 
     rest = rest.slice(cut).trim();
   }
 
-  if (rest.length) parts.push(rest);
+  if (rest.length) {
+    parts.push(rest);
+  }
+
   return parts;
 }
 
@@ -209,7 +266,9 @@ async function fetchJsonWithTimeout(url) {
   const res = await fetchWithTimeout(
     url,
     {
-      headers: { "User-Agent": "RinaldoScoutReportBot/1.0" }
+      headers: {
+        "User-Agent": "RinaldoScoutReportBot/1.0"
+      }
     },
     FETCH_TIMEOUT_MS
   );
@@ -218,11 +277,18 @@ async function fetchJsonWithTimeout(url) {
     throw new Error(`HTTP ${res.status}`);
   }
 
-  return await res.json();
+  const json = await res.json();
+
+  if (!Array.isArray(json)) {
+    return [];
+  }
+
+  return json;
 }
 
 function getSeasonYear(referenceDate = new Date()) {
   const info = getLocalDateInfo(referenceDate, TIMEZONE);
+
   return info.month >= 8 ? info.year : info.year - 1;
 }
 
@@ -232,6 +298,7 @@ function getSeasonYear(referenceDate = new Date()) {
 function extractRetryAfter(bodyText) {
   try {
     const json = JSON.parse(bodyText);
+
     return json?.parameters?.retry_after
       ? Number(json.parameters.retry_after)
       : null;
@@ -241,13 +308,19 @@ function extractRetryAfter(bodyText) {
 }
 
 async function sendTelegramRaw(chatId, text) {
+  if (!TOKEN) {
+    throw new Error("BOT_TOKEN mancante.");
+  }
+
   const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
 
   const res = await fetchWithTimeout(
     url,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         chat_id: chatId,
         text,
@@ -316,7 +389,9 @@ async function sendOneLogicalMessage(chatId, text, title) {
       `${title} parte ${i + 1}/${chunks.length}`
     );
 
-    if (!ok) allOk = false;
+    if (!ok) {
+      allOk = false;
+    }
 
     await sleep(MESSAGE_DELAY_MS);
   }
@@ -345,42 +420,56 @@ async function broadcastAllMessages(messages) {
 // ======================================================
 // PARSE FIXTURES
 // ======================================================
-function getMatchDateRaw(r) {
-  return r.DateUtc || r.MatchDate || r.Date || "";
+function getMatchDateRaw(row) {
+  return (
+    row.DateUtc ||
+    row.MatchDate ||
+    row.Date ||
+    row.DateTime ||
+    row.UtcDate ||
+    ""
+  );
+}
+
+function hasScore(row) {
+  return (
+    row.HomeTeamScore !== null &&
+    row.HomeTeamScore !== undefined &&
+    row.HomeTeamScore !== "" &&
+    row.AwayTeamScore !== null &&
+    row.AwayTeamScore !== undefined &&
+    row.AwayTeamScore !== ""
+  );
 }
 
 function parseFixtureData(json, league) {
   const played = [];
 
-  for (const r of json) {
-    if (!r.HomeTeam || !r.AwayTeam) continue;
+  for (const row of json) {
+    if (!row.HomeTeam || !row.AwayTeam) continue;
+    if (!hasScore(row)) continue;
 
-    const hasScore =
-      r.HomeTeamScore !== null &&
-      r.HomeTeamScore !== undefined &&
-      r.AwayTeamScore !== null &&
-      r.AwayTeamScore !== undefined &&
-      r.HomeTeamScore !== "" &&
-      r.AwayTeamScore !== "";
-
-    if (!hasScore) continue;
+    const dateUtc = getMatchDateRaw(row);
+    const parsedDate = parseDateValue(dateUtc);
 
     played.push({
       league: league.name,
       flag: league.flag,
       slug: league.slug,
-      round: Number(r.RoundNumber || 0),
-      dateUtc: getMatchDateRaw(r),
-      home: safeText(r.HomeTeam),
-      away: safeText(r.AwayTeam),
-      hg: Number(r.HomeTeamScore),
-      ag: Number(r.AwayTeamScore)
+      round: Number(row.RoundNumber || 0),
+      dateUtc,
+      parsedDate,
+      home: safeText(row.HomeTeam),
+      away: safeText(row.AwayTeam),
+      hg: Number(row.HomeTeamScore),
+      ag: Number(row.AwayTeamScore)
     });
   }
 
   played.sort((a, b) => {
-    const da = parseDateValue(a.dateUtc)?.getTime() || 0;
-    const db = parseDateValue(b.dateUtc)?.getTime() || 0;
+    const da = a.parsedDate?.getTime() || 0;
+    const db = b.parsedDate?.getTime() || 0;
+
     return da - db;
   });
 
@@ -388,182 +477,371 @@ function parseFixtureData(json, league) {
 }
 
 // ======================================================
-// PROFILO NEOPROMOSSE
+// PROFILO SALVEZZA / NEOPROMOSSE
 // ======================================================
-function computeSurvivalProfile(previousMatches) {
+function computeTeamTable(matches) {
   const teams = {};
 
-  previousMatches.forEach(m => {
-    if (!teams[m.home]) teams[m.home] = { p: 0, gf: 0, ga: 0, pts: 0 };
-    if (!teams[m.away]) teams[m.away] = { p: 0, gf: 0, ga: 0, pts: 0 };
+  for (const m of matches) {
+    if (!m.home || !m.away) continue;
+    if (m.hg === null || m.ag === null) continue;
 
-    teams[m.home].p++;
+    if (!teams[m.home]) {
+      teams[m.home] = {
+        team: m.home,
+        p: 0,
+        gf: 0,
+        ga: 0,
+        pts: 0
+      };
+    }
+
+    if (!teams[m.away]) {
+      teams[m.away] = {
+        team: m.away,
+        p: 0,
+        gf: 0,
+        ga: 0,
+        pts: 0
+      };
+    }
+
+    teams[m.home].p += 1;
     teams[m.home].gf += m.hg;
     teams[m.home].ga += m.ag;
 
-    teams[m.away].p++;
+    teams[m.away].p += 1;
     teams[m.away].gf += m.ag;
     teams[m.away].ga += m.hg;
 
-    if (m.hg > m.ag) teams[m.home].pts += 3;
-    else if (m.hg < m.ag) teams[m.away].pts += 3;
-    else {
+    if (m.hg > m.ag) {
+      teams[m.home].pts += 3;
+    } else if (m.hg < m.ag) {
+      teams[m.away].pts += 3;
+    } else {
       teams[m.home].pts += 1;
       teams[m.away].pts += 1;
     }
-  });
+  }
 
-  const ranked = Object.values(teams)
+  return Object.values(teams);
+}
+
+function computeSurvivalProfile(previousMatches) {
+  const table = computeTeamTable(previousMatches);
+
+  const ranked = table
     .filter(t => t.p > 0)
-    .sort((a, b) => (a.pts / a.p) - (b.pts / b.p));
+    .sort((a, b) => {
+      const ppgA = a.pts / a.p;
+      const ppgB = b.pts / b.p;
+
+      return ppgA - ppgB;
+    });
 
   if (!ranked.length) {
-    return { gf: 1.0, ga: 1.6 };
+    return {
+      gf: 1.0,
+      ga: 1.65
+    };
   }
 
   const bottomCount = Math.max(3, Math.ceil(ranked.length * 0.2));
   const bottomTeams = ranked.slice(0, bottomCount);
 
+  const gf = average(bottomTeams.map(t => t.gf / t.p), 1.0);
+  const ga = average(bottomTeams.map(t => t.ga / t.p), 1.65);
+
   return {
-    gf: bottomTeams.reduce((s, t) => s + (t.gf / t.p), 0) / bottomTeams.length || 1.0,
-    ga: bottomTeams.reduce((s, t) => s + (t.ga / t.p), 0) / bottomTeams.length || 1.6
+    gf: clamp(gf, 0.6, 1.3),
+    ga: clamp(ga, 1.3, 2.2)
   };
 }
 
 // ======================================================
-// MODELLO
+// STATISTICHE SQUADRA
 // ======================================================
-function poisson(lambda, k) {
-  let fact = 1;
+function getTeamGames(team, matches) {
+  return matches
+    .filter(m => m.home === team || m.away === team)
+    .filter(m => m.hg !== null && m.ag !== null)
+    .sort((a, b) => {
+      const da = a.parsedDate?.getTime() || 0;
+      const db = b.parsedDate?.getTime() || 0;
 
-  for (let i = 2; i <= k; i++) {
-    fact *= i;
-  }
-
-  return (Math.pow(lambda, k) * Math.exp(-lambda)) / fact;
+      return db - da;
+    });
 }
 
-function getStats(team, matches, fallbackProfile) {
-  const games = matches.filter(m => m.home === team || m.away === team);
+function getRawStats(team, games) {
+  if (!games.length) return null;
 
-  if (!games.length) {
-    return fallbackProfile || { gf: 1.0, ga: 1.6 };
-  }
-
-  const rawGF = games.reduce((sum, m) => {
+  const gf = games.reduce((sum, m) => {
     return sum + (m.home === team ? m.hg : m.ag);
   }, 0) / games.length;
 
-  const rawGA = games.reduce((sum, m) => {
+  const ga = games.reduce((sum, m) => {
     return sum + (m.home === team ? m.ag : m.hg);
   }, 0) / games.length;
 
-  if (games.length < 5 && fallbackProfile) {
-    const realWeight = games.length / 5;
-    const fallbackWeight = 1 - realWeight;
-
-    return {
-      gf: rawGF * realWeight + fallbackProfile.gf * fallbackWeight,
-      ga: rawGA * realWeight + fallbackProfile.ga * fallbackWeight
-    };
-  }
-
   return {
-    gf: rawGF,
-    ga: rawGA
+    games: games.length,
+    gf,
+    ga
   };
 }
 
-function calculate(lambdaH, lambdaA) {
-  let pH = 0;
-  let pD = 0;
-  let pA = 0;
-  let over15 = 0;
-  let over25 = 0;
-  let under25 = 0;
-  let under35 = 0;
-  let btts = 0;
+function blendStats(primary, secondary, primaryWeight) {
+  const w1 = clamp(primaryWeight, 0, 1);
+  const w2 = 1 - w1;
 
-  for (let i = 0; i <= 5; i++) {
-    for (let j = 0; j <= 5; j++) {
-      const p = poisson(lambdaH, i) * poisson(lambdaA, j);
+  return {
+    games: primary.games || 0,
+    gf: primary.gf * w1 + secondary.gf * w2,
+    ga: primary.ga * w1 + secondary.ga * w2
+  };
+}
 
-      if (i > j) pH += p;
-      else if (i === j) pD += p;
-      else pA += p;
+function getStats(team, currentPlayedBeforeMatch, previousPlayed, survivalProfile) {
+  const currentGames = getTeamGames(team, currentPlayedBeforeMatch).slice(0, TEAM_FORM_N);
+  const previousGames = getTeamGames(team, previousPlayed);
 
-      if (i + j > 1) over15 += p;
-      if (i + j > 2) over25 += p;
+  const currentStats = getRawStats(team, currentGames);
+  const previousStats = getRawStats(team, previousGames);
 
-      if (i + j < 3) under25 += p;
-      if (i + j < 4) under35 += p;
+  const fallback = {
+    games: 0,
+    gf: survivalProfile.gf,
+    ga: survivalProfile.ga
+  };
 
-      if (i > 0 && j > 0) btts += p;
+  if (!currentStats && !previousStats) {
+    return {
+      ...fallback,
+      isPromoted: true
+    };
+  }
+
+  if (!previousStats && currentStats) {
+    const realWeight = clamp(currentStats.games / 6, 0.15, 1);
+
+    return {
+      ...blendStats(currentStats, fallback, realWeight),
+      isPromoted: true
+    };
+  }
+
+  if (previousStats && !currentStats) {
+    return {
+      ...previousStats,
+      isPromoted: false
+    };
+  }
+
+  const currentWeight = clamp(currentStats.games / 8, 0.25, 0.85);
+
+  return {
+    ...blendStats(currentStats, previousStats, currentWeight),
+    isPromoted: false
+  };
+}
+
+// ======================================================
+// MODELLO POISSON
+// ======================================================
+function factorial(k) {
+  let result = 1;
+
+  for (let i = 2; i <= k; i++) {
+    result *= i;
+  }
+
+  return result;
+}
+
+function poisson(lambda, k) {
+  const safeLambda = Math.max(0.1, lambda);
+
+  return (Math.pow(safeLambda, k) * Math.exp(-safeLambda)) / factorial(k);
+}
+
+function calculateMarkets(lambdaH, lambdaA) {
+  const markets = {
+    "1": 0,
+    "X": 0,
+    "2": 0,
+    "1X": 0,
+    "X2": 0,
+    "O1.5": 0,
+    "O2.5": 0,
+    "U2.5": 0,
+    "U3.5": 0,
+    "BTTS": 0,
+
+    "1 + O1.5": 0,
+    "1 + O2.5": 0,
+    "1 + U2.5": 0,
+    "1 + U3.5": 0,
+
+    "X + O1.5": 0,
+    "X + O2.5": 0,
+    "X + U2.5": 0,
+    "X + U3.5": 0,
+
+    "2 + O1.5": 0,
+    "2 + O2.5": 0,
+    "2 + U2.5": 0,
+    "2 + U3.5": 0,
+
+    "1X + O1.5": 0,
+    "1X + O2.5": 0,
+    "1X + U2.5": 0,
+    "1X + U3.5": 0,
+
+    "X2 + O1.5": 0,
+    "X2 + O2.5": 0,
+    "X2 + U2.5": 0,
+    "X2 + U3.5": 0,
+
+    "BTTS + O1.5": 0,
+    "BTTS + O2.5": 0
+  };
+
+  for (let h = 0; h <= MAX_GOALS; h++) {
+    for (let a = 0; a <= MAX_GOALS; a++) {
+      const p = poisson(lambdaH, h) * poisson(lambdaA, a);
+      const total = h + a;
+
+      const homeWin = h > a;
+      const draw = h === a;
+      const awayWin = h < a;
+      const oneX = homeWin || draw;
+      const x2 = draw || awayWin;
+      const over15 = total > 1;
+      const over25 = total > 2;
+      const under25 = total < 3;
+      const under35 = total < 4;
+      const btts = h > 0 && a > 0;
+
+      if (homeWin) markets["1"] += p;
+      if (draw) markets["X"] += p;
+      if (awayWin) markets["2"] += p;
+      if (oneX) markets["1X"] += p;
+      if (x2) markets["X2"] += p;
+      if (over15) markets["O1.5"] += p;
+      if (over25) markets["O2.5"] += p;
+      if (under25) markets["U2.5"] += p;
+      if (under35) markets["U3.5"] += p;
+      if (btts) markets["BTTS"] += p;
+
+      if (homeWin && over15) markets["1 + O1.5"] += p;
+      if (homeWin && over25) markets["1 + O2.5"] += p;
+      if (homeWin && under25) markets["1 + U2.5"] += p;
+      if (homeWin && under35) markets["1 + U3.5"] += p;
+
+      if (draw && over15) markets["X + O1.5"] += p;
+      if (draw && over25) markets["X + O2.5"] += p;
+      if (draw && under25) markets["X + U2.5"] += p;
+      if (draw && under35) markets["X + U3.5"] += p;
+
+      if (awayWin && over15) markets["2 + O1.5"] += p;
+      if (awayWin && over25) markets["2 + O2.5"] += p;
+      if (awayWin && under25) markets["2 + U2.5"] += p;
+      if (awayWin && under35) markets["2 + U3.5"] += p;
+
+      if (oneX && over15) markets["1X + O1.5"] += p;
+      if (oneX && over25) markets["1X + O2.5"] += p;
+      if (oneX && under25) markets["1X + U2.5"] += p;
+      if (oneX && under35) markets["1X + U3.5"] += p;
+
+      if (x2 && over15) markets["X2 + O1.5"] += p;
+      if (x2 && over25) markets["X2 + O2.5"] += p;
+      if (x2 && under25) markets["X2 + U2.5"] += p;
+      if (x2 && under35) markets["X2 + U3.5"] += p;
+
+      if (btts && over15) markets["BTTS + O1.5"] += p;
+      if (btts && over25) markets["BTTS + O2.5"] += p;
     }
   }
 
-  const base = {
-    "1": pH,
-    "X": pD,
-    "2": pA,
-    "1X": pH + pD,
-    "X2": pD + pA,
-    "O1.5": over15,
-    "O2.5": over25,
-    "U2.5": under25,
-    "U3.5": under35,
-    "BTTS": btts
-  };
+  return markets;
+}
 
-  let bets = [];
+function calculatePicks(lambdaH, lambdaA) {
+  const markets = calculateMarkets(lambdaH, lambdaA);
 
-  Object.entries(base).forEach(([label, pct]) => {
-    bets.push({ label, pct });
-  });
-
-  ["1", "X", "2"].forEach(result => {
-    ["O1.5", "O2.5", "U2.5", "U3.5"].forEach(total => {
-      bets.push({
-        label: `${result} + ${total}`,
-        pct: base[result] * base[total]
-      });
-    });
-  });
-
-  ["1X", "X2"].forEach(dc => {
-    ["O1.5", "O2.5", "U2.5", "U3.5"].forEach(total => {
-      bets.push({
-        label: `${dc} + ${total}`,
-        pct: base[dc] * base[total]
-      });
-    });
-  });
-
-  ["O1.5", "O2.5"].forEach(total => {
-    bets.push({
-      label: `BTTS + ${total}`,
-      pct: base["BTTS"] * base[total]
-    });
-  });
-
-  bets = bets
-    .filter(b => b.pct > 0.40 && b.pct < 0.85)
+  const bets = Object.entries(markets)
+    .map(([label, pctValue]) => ({
+      label,
+      pct: pctValue
+    }))
+    .filter(b => b.pct >= 0.35 && b.pct <= 0.90)
     .sort((a, b) => b.pct - a.pct);
 
   const safe = bets.find(b => b.pct >= 0.70);
-  const mid = bets.find(b => b.pct < 0.70 && b.pct >= 0.55);
-  const value = bets.find(b => b.pct < 0.55);
+  const balanced = bets.find(b => b.pct < 0.70 && b.pct >= 0.55);
+  const value = bets.find(b => b.pct < 0.55 && b.pct >= 0.40);
 
-  const result = [safe, mid, value].filter(Boolean);
+  const result = [];
+
+  if (safe) {
+    result.push({
+      ...safe,
+      level: "safe",
+      icon: "✅"
+    });
+  }
+
+  if (balanced) {
+    result.push({
+      ...balanced,
+      level: "balanced",
+      icon: "⚖️"
+    });
+  }
+
+  if (value) {
+    result.push({
+      ...value,
+      level: "value",
+      icon: "🔥"
+    });
+  }
 
   for (const bet of bets) {
     if (result.length >= 3) break;
-    if (!result.some(x => x.label === bet.label)) result.push(bet);
+
+    const alreadyUsed = result.some(r => r.label === bet.label);
+
+    if (!alreadyUsed) {
+      const level =
+        result.length === 0
+          ? "safe"
+          : result.length === 1
+            ? "balanced"
+            : "value";
+
+      const icon =
+        level === "safe"
+          ? "✅"
+          : level === "balanced"
+            ? "⚖️"
+            : "🔥";
+
+      result.push({
+        ...bet,
+        level,
+        icon
+      });
+    }
   }
 
   return result.slice(0, 3);
 }
 
+// ======================================================
+// CHECK RISULTATI
+// ======================================================
 function checkBet(label, home, away, hg, ag) {
   const total = hg + ag;
   const btts = hg > 0 && ag > 0;
@@ -585,8 +863,10 @@ function checkBet(label, home, away, hg, ag) {
   const comboParts = label.split(" + ");
 
   if (comboParts.length === 2) {
-    return checkBet(comboParts[0], home, away, hg, ag) &&
-           checkBet(comboParts[1], home, away, hg, ag);
+    return (
+      checkBet(comboParts[0], home, away, hg, ag) &&
+      checkBet(comboParts[1], home, away, hg, ag)
+    );
   }
 
   return null;
@@ -597,28 +877,35 @@ function checkBet(label, home, away, hg, ag) {
 // ======================================================
 function emptyStats() {
   return {
-    safe: { ok: 0, tot: 0 },
-    balanced: { ok: 0, tot: 0 },
-    value: { ok: 0, tot: 0 },
-    total: { ok: 0, tot: 0 }
+    safe: {
+      ok: 0,
+      tot: 0
+    },
+    balanced: {
+      ok: 0,
+      tot: 0
+    },
+    value: {
+      ok: 0,
+      tot: 0
+    },
+    total: {
+      ok: 0,
+      tot: 0
+    }
   };
 }
 
 function addStat(stats, level, outcome) {
   if (outcome === null || outcome === undefined) return;
 
-  stats[level].tot++;
-  stats.total.tot++;
+  stats[level].tot += 1;
+  stats.total.tot += 1;
 
   if (outcome) {
-    stats[level].ok++;
-    stats.total.ok++;
+    stats[level].ok += 1;
+    stats.total.ok += 1;
   }
-}
-
-function pct(ok, tot) {
-  if (!tot) return 0;
-  return Math.round((ok / tot) * 100);
 }
 
 function statsLine(icon, label, s) {
@@ -654,11 +941,13 @@ async function analyzeLeagueReport(league, weekendKeys) {
     const previousSlug = `${league.slug}-${previousSeasonYear}`;
 
     const currentJson = await fetchJsonWithTimeout(BASE_URL + currentSlug);
+
     let previousJson = [];
 
     try {
       previousJson = await fetchJsonWithTimeout(BASE_URL + previousSlug);
-    } catch {
+    } catch (err) {
+      console.log(`Storico precedente non disponibile per ${league.name}: ${err.message}`);
       previousJson = [];
     }
 
@@ -672,12 +961,8 @@ async function analyzeLeagueReport(league, weekendKeys) {
       slug: previousSlug
     });
 
-    const survivalProfile = computeSurvivalProfile(previousPlayed);
-    const allPlayed = previousPlayed.concat(currentPlayed);
-
     const targetMatches = currentPlayed.filter(m => {
-      const d = parseDateValue(m.dateUtc);
-      const key = getDateKeyInTimezone(d, TIMEZONE);
+      const key = getDateKeyInTimezone(m.parsedDate, TIMEZONE);
       return weekendKeys.has(key);
     });
 
@@ -687,49 +972,57 @@ async function analyzeLeagueReport(league, weekendKeys) {
       return result;
     }
 
-    for (const m of targetMatches) {
-      const matchDate = parseDateValue(m.dateUtc);
+    const survivalProfile = computeSurvivalProfile(previousPlayed);
 
-      const previousForMatch = allPlayed.filter(p => {
+    for (const m of targetMatches) {
+      const matchDateMs = m.parsedDate?.getTime() || 0;
+
+      const currentPlayedBeforeMatch = currentPlayed.filter(p => {
         if (p === m) return false;
 
-        const pDate = parseDateValue(p.dateUtc);
+        const pDateMs = p.parsedDate?.getTime() || 0;
 
-        if (matchDate && pDate) {
-          return pDate.getTime() < matchDate.getTime();
-        }
-
-        return false;
+        return pDateMs > 0 && pDateMs < matchDateMs;
       });
 
-      const h = getStats(m.home, previousForMatch, survivalProfile);
-      const a = getStats(m.away, previousForMatch, survivalProfile);
-
-      const bets = calculate(
-        (h.gf + a.ga) / 2,
-        (a.gf + h.ga) / 2
+      const homeStats = getStats(
+        m.home,
+        currentPlayedBeforeMatch,
+        previousPlayed,
+        survivalProfile
       );
 
-      if (bets.length < 3) continue;
+      const awayStats = getStats(
+        m.away,
+        currentPlayedBeforeMatch,
+        previousPlayed,
+        survivalProfile
+      );
 
-      const levels = ["safe", "balanced", "value"];
-      const icons = ["✅", "⚖️", "🔥"];
+      const lambdaH = clamp((homeStats.gf + awayStats.ga) / 2, 0.25, 3.5);
+      const lambdaA = clamp((awayStats.gf + homeStats.ga) / 2, 0.25, 3.5);
 
-      const checkedBets = bets.slice(0, 3).map((bet, idx) => {
+      const bets = calculatePicks(lambdaH, lambdaA);
+
+      if (bets.length < 3) {
+        continue;
+      }
+
+      const checkedBets = bets.slice(0, 3).map(bet => {
         const outcome = checkBet(bet.label, m.home, m.away, m.hg, m.ag);
 
-        addStat(result.stats, levels[idx], outcome);
+        addStat(result.stats, bet.level, outcome);
 
         return {
           ...bet,
-          level: levels[idx],
-          icon: icons[idx],
           outcome
         };
       });
 
       result.matches.push({
         ...m,
+        lambdaH,
+        lambdaA,
         bets: checkedBets
       });
     }
@@ -742,7 +1035,11 @@ async function analyzeLeagueReport(league, weekendKeys) {
 }
 
 async function loadReportData() {
-  const { keys, saturdayKey, sundayKey } = getPreviousWeekendKeys();
+  const {
+    keys,
+    saturdayKey,
+    sundayKey
+  } = getPreviousWeekendKeys();
 
   console.log(`Weekend precedente: ${saturdayKey}, ${sundayKey}`);
 
@@ -776,6 +1073,7 @@ async function loadReportData() {
 function resultIcon(outcome) {
   if (outcome === true) return "✅";
   if (outcome === false) return "❌";
+
   return "❔";
 }
 
@@ -783,11 +1081,9 @@ function buildTopStats(matches) {
   const stats = emptyStats();
 
   for (const m of matches) {
-    const levels = ["safe", "balanced", "value"];
-
-    m.bets.slice(0, 3).forEach((bet, idx) => {
-      addStat(stats, levels[idx], bet.outcome);
-    });
+    for (const bet of m.bets.slice(0, 3)) {
+      addStat(stats, bet.level, bet.outcome);
+    }
   }
 
   return stats;
@@ -797,6 +1093,7 @@ function buildMainReportMessage(allMatches, saturdayKey, sundayKey) {
   const sorted = [...allMatches].sort((a, b) => {
     const pa = a.bets?.[0]?.pct || 0;
     const pb = b.bets?.[0]?.pct || 0;
+
     return pb - pa;
   });
 
@@ -809,9 +1106,9 @@ function buildMainReportMessage(allMatches, saturdayKey, sundayKey) {
   msg += `Periodo analizzato: ${saturdayKey} / ${sundayKey}\n\n`;
 
   msg += "📌 LEGENDA\n";
-  msg += "✅ Sicura - primo pick del modello\n";
-  msg += "⚖️ Equilibrata - secondo pick\n";
-  msg += "🔥 Value - terzo pick più aggressivo\n\n";
+  msg += "✅ Sicura - pick più prudente del modello\n";
+  msg += "⚖️ Equilibrata - pick intermedio\n";
+  msg += "🔥 Value - pick più aggressivo\n\n";
 
   msg += "━━━━━━━━━━━━━━━\n\n";
   msg += `🏆 TOP ${top.length} PICKS - RISULTATI\n\n`;
@@ -826,23 +1123,32 @@ function buildMainReportMessage(allMatches, saturdayKey, sundayKey) {
     const date = formatDateIT(m.dateUtc);
 
     msg += `${m.flag} ${m.home} - ${m.away} ${m.hg}-${m.ag}\n`;
-    if (date) msg += `🗓 ${date}\n`;
+
+    if (date) {
+      msg += `🗓 ${date}\n`;
+    }
 
     for (const bet of m.bets.slice(0, 3)) {
-      msg += `${bet.icon} ${bet.label} ${resultIcon(bet.outcome)}\n`;
+      msg += `${bet.icon} ${pickLabel(bet)} ${resultIcon(bet.outcome)}\n`;
     }
 
     msg += "\n";
   }
 
   msg += "━━━━━━━━━━━━━━━\n";
-  msg += "⚠️ Report automatico: misura affidabilità del modello, non garantisce esiti futuri.";
+  msg += "⚠️ Report automatico: misura l'affidabilità del modello, non garantisce esiti futuri.";
 
   return msg;
 }
 
 function buildLeagueReportMessage(leagueResult) {
-  const { league, matches, stats, totalWeekendMatches, error } = leagueResult;
+  const {
+    league,
+    matches,
+    stats,
+    totalWeekendMatches,
+    error
+  } = leagueResult;
 
   let msg = "";
 
@@ -855,7 +1161,11 @@ function buildLeagueReportMessage(leagueResult) {
 
   if (!matches.length) {
     msg += "⚠️ Partite trovate, ma nessuna verificabile dal modello.\n";
-    if (error) msg += `Motivo: ${error}\n`;
+
+    if (error) {
+      msg += `Motivo: ${error}\n`;
+    }
+
     return msg;
   }
 
@@ -864,8 +1174,9 @@ function buildLeagueReportMessage(leagueResult) {
   msg += "━━━━━━━━━━━━━━━\n\n";
 
   const sorted = [...matches].sort((a, b) => {
-    const da = parseDateValue(a.dateUtc)?.getTime() || 0;
-    const db = parseDateValue(b.dateUtc)?.getTime() || 0;
+    const da = a.parsedDate?.getTime() || 0;
+    const db = b.parsedDate?.getTime() || 0;
+
     return da - db;
   });
 
@@ -873,14 +1184,17 @@ function buildLeagueReportMessage(leagueResult) {
     const date = formatDateIT(m.dateUtc);
 
     msg += `⚽ ${m.home} - ${m.away} ${m.hg}-${m.ag}\n`;
-    if (date) msg += `🗓 ${date}\n`;
+
+    if (date) {
+      msg += `🗓 ${date}\n`;
+    }
 
     for (const bet of m.bets.slice(0, 3)) {
-      msg += `${bet.icon} ${bet.label} ${resultIcon(bet.outcome)}\n`;
+      msg += `${bet.icon} ${pickLabel(bet)} ${resultIcon(bet.outcome)}\n`;
     }
 
     if (SHOW_NUMBERS) {
-      msg += `📊 Picks calcolate su storico precedente alla partita\n`;
+      msg += `📊 Lambda: ${m.lambdaH.toFixed(2)} - ${m.lambdaA.toFixed(2)}\n`;
     }
 
     msg += "\n";
@@ -914,6 +1228,8 @@ function buildSummaryReportMessage(leagueResults) {
 
     if (!played) {
       msg += `⚠️ ${lr.league.flag} ${lr.league.name}: nessuna partita\n`;
+    } else if (!total.tot) {
+      msg += `⚠️ ${lr.league.flag} ${lr.league.name}: partite non verificabili\n`;
     } else {
       msg += `✅ ${lr.league.flag} ${lr.league.name}: ${total.ok}/${total.tot} - ${pct(total.ok, total.tot)}%\n`;
     }
@@ -951,7 +1267,12 @@ function buildAllReportMessages(leagueResults, allMatches, saturdayKey, sundayKe
 // MAIN
 // ======================================================
 async function main() {
-  console.log("Avvio report mercoledì");
+  console.log("Avvio report statistiche passate");
+
+  if (!TOKEN) {
+    console.error("BOT_TOKEN mancante. Configuralo nei GitHub Secrets.");
+    process.exit(1);
+  }
 
   const users = loadUsers();
 
@@ -968,8 +1289,6 @@ async function main() {
     sundayKey
   } = await loadReportData();
 
-  // Se nel weekend precedente non ci sono state partite,
-  // non invia nulla.
   if (!totalWeekendMatches) {
     console.log("Nessuna partita giocata nel weekend precedente. Nessun invio.");
     return;
@@ -984,7 +1303,7 @@ async function main() {
 
   await broadcastAllMessages(messages);
 
-  console.log("Report completato");
+  console.log(`Report completato. Partite weekend: ${totalWeekendMatches}. Partite verificate: ${allMatches.length}.`);
 }
 
 main().catch(async err => {
