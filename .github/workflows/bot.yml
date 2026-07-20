@@ -2,11 +2,11 @@ name: Invio Pronostici
 
 on:
   schedule:
-    # 🌍 Mondiali → ogni giorno alle 10:00
-    - cron: "0 10 * * *"
+    # Giovedì ore 12:00 italiane circa durante ora legale
+    - cron: "0 10 * 3-10 4"
 
-    # ⚽ Campionati → ogni venerdì alle 10:00
-    # cron: "0 10 * * 5"
+    # Giovedì ore 12:00 italiane circa durante ora solare
+    - cron: "0 11 * 11,12,1,2 4"
 
   workflow_dispatch:
     inputs:
@@ -20,13 +20,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - uses: actions/setup-node@v3
+      - name: Setup Node
+        uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - run: node bot.js
+      - name: Run bot
+        run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TEST_MODE: ${{ github.event.inputs.TEST_MODE }}
