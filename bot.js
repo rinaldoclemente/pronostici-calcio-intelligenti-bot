@@ -56,6 +56,44 @@ function getMatchDate(match) {
   return match.DateUtc || match.MatchDate || match.Date || null;
 }
 
+function formatDate(d) {
+  if (!d) return null;
+
+  const date = new Date(d);
+
+  if (isNaN(date)) return null;
+
+  return date.toISOString().split("T")[0];
+}
+
+function getWeekendDates(referenceDate = new Date()) {
+  const ref = new Date(referenceDate);
+  const day = ref.getDay();
+
+  // Giorni mancanti al sabato
+  const daysToSaturday = (6 - day + 7) % 7;
+
+  const saturday = new Date(ref);
+  saturday.setDate(ref.getDate() + daysToSaturday);
+
+  const sunday = new Date(saturday);
+  sunday.setDate(saturday.getDate() + 1);
+
+  return {
+    saturday: formatDate(saturday),
+    sunday: formatDate(sunday)
+  };
+}
+
+function isWeekendMatch(matchDate) {
+  const d = formatDate(matchDate);
+  if (!d) return false;
+
+  const { saturday, sunday } = getWeekendDates();
+
+  return d === saturday || d === sunday;
+}
+
 // =============================
 // POISSON
 // =============================
@@ -327,12 +365,12 @@ async function loadLeagues() {
     }
 
     const survivalProfile = computeSurvivalProfile(previousPlayed);
-
     const allPlayedForStats = previousPlayed.concat(currentPlayed);
 
     const targetMatches = currentUpcoming
       .filter(m => m.home && m.away)
-      .slice(0, TEST_MODE ? 5 : 10);
+      .filter(m => TEST_MODE ? true : isWeekendMatch(m.date))
+      .slice(0, TEST_MODE ? 5 : 50);
 
     targetMatches.forEach(m => {
       const h = getStats(m.home, allPlayedForStats, survivalProfile);
@@ -409,6 +447,7 @@ function buildMessage(matches, title) {
 async function run() {
   const matches = await loadLeagues();
 
+  // Se non ci sono partite nel weekend non invia nulla
   if (matches.length === 0) return;
 
   const title = TEST_MODE
