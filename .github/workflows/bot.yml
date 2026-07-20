@@ -2,11 +2,8 @@ name: Invio Pronostici
 
 on:
   schedule:
-    # Giovedì ore 12:00 italiane circa durante ora legale
-    - cron: "0 10 * 3-10 4"
-
-    # Giovedì ore 12:00 italiane circa durante ora solare
-    - cron: "0 11 * 11,12,1,2 4"
+    # Giovedì ore 12:00 Italia circa in ora legale (10:00 UTC)
+    - cron: "0 10 * * 4"
 
   workflow_dispatch:
     inputs:
@@ -21,15 +18,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Run bot
         run: node bot.js
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          TEST_MODE: ${{ github.event.inputs.TEST_MODE }}
+          TEST_MODE: ${{ github.event.inputs.TEST_MODE || 'false' }}
+          TIMEZONE: Europe/Rome
+          TEAM_FORM_N: 10
+          TOP_LIMIT: 10
+          SHOW_NUMBERS: false
