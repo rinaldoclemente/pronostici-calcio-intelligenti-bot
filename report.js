@@ -438,6 +438,7 @@ function topScore(match) { const base = (match.bets[0]?.pct || 0) * 0.65 + (matc
 function checkBet(label, hg, ag) {
   const total = hg + ag;
   const btts = hg > 0 && ag > 0;
+
   if (label === "1") return hg > ag;
   if (label === "X") return hg === ag;
   if (label === "2") return ag > hg;
@@ -448,22 +449,48 @@ function checkBet(label, hg, ag) {
   if (label === "U2.5") return total <= 2;
   if (label === "U3.5") return total <= 3;
   if (label === "BTTS") return btts;
+
   const parts = label.split(" + ");
   if (parts.length === 2) return checkBet(parts[0], hg, ag) && checkBet(parts[1], hg, ag);
+
   return null;
 }
 
 function emptyStats() {
-  return { ok: 0, tot: 0, byMarket: {} };
+  return {
+    ok: 0,
+    tot: 0,
+    noBetMatches: 0,
+    checkedMatches: 0,
+    byMarket: {}
+  };
 }
 
 function addStat(stats, label, outcome) {
   if (outcome === null || outcome === undefined) return;
+
   stats.tot += 1;
   if (outcome) stats.ok += 1;
-  if (!stats.byMarket[label]) stats.byMarket[label] = { ok: 0, tot: 0 };
+
+  if (!stats.byMarket[label]) {
+    stats.byMarket[label] = { ok: 0, tot: 0 };
+  }
+
   stats.byMarket[label].tot += 1;
   if (outcome) stats.byMarket[label].ok += 1;
+}
+
+function mergeStats(target, source) {
+  target.ok += source.ok;
+  target.tot += source.tot;
+  target.noBetMatches += source.noBetMatches;
+  target.checkedMatches += source.checkedMatches;
+
+  for (const [label, s] of Object.entries(source.byMarket)) {
+    if (!target.byMarket[label]) target.byMarket[label] = { ok: 0, tot: 0 };
+    target.byMarket[label].ok += s.ok;
+    target.byMarket[label].tot += s.tot;
+  }
 }
 
 function pctLine(ok, tot) {
@@ -471,152 +498,184 @@ function pctLine(ok, tot) {
 }
 
 function latestCompletedRound(currentMatches) {
-  const rounds = [...new Set(currentMatches.filter(m => m.round !== null).map(m => m.round))].sort((a, b) => b - a);
+  const rounds = [...new Set(currentMatches.filter(m => m.round !== null).map(m => m.round))]
+    .sort((a, b) => b - a);
+
   for (const round of rounds) {
     const matches = currentMatches.filter(m => m.round === round);
     if (matches.length && matches.every(m => m.played)) return round;
   }
+
   return null;
+}
+
+function marketStatsLine(stats, limit = 8) {
+  const markets = Object.entries(stats.byMarket)
+    .filter(([, s]) => s.tot > 0)
+    .sort((a, b) => b[1].tot - a[1].tot || b[1].ok - a[1].ok)
+    .slice(0, limit);
+
+  if (!markets.length) return "N/D";
+
+  return markets
+    .map(([label, s]) => `${label}: ${pctLine(s.ok, s.tot)}`)
+    .join("\n");
+}
+
+function formatLeagueLine(result, mode) {
+  const stats = result[mode];
+  if (result.latestRound === null) return `⚠️ ${result.league}: nessuna giornata conclusa`;
+  return `• ${result.league}: ${pctLine(stats.ok, stats.tot)} (${stats.checkedMatches} partite, no bet ${stats.noBetMatches})`;
+}
+
+function evaluateMatch(match, currentPlayed, previousPlayed, survival) {
+  const matchTime = match.parsedDate?.getTime() || 0;
+  const currentBefore = currentPlayed.filter(m => (m.parsedDate?.getTime() || 0) < matchTime);
+  const la = leagueAvg(currentBefore, previousPlayed);
+  const homeProfile = profile(match.home, "home", currentBefore, previousPlayed, survival, la);
+  const awayProfile = profile(match.away, "away", currentBefore, previousPlayed, survival, la);
+  const { lambdaH, lambdaA } = expectedGoals(homeProfile, awayProfile, la);
+  const bets = calculateSafePicks(lambdaH, lambdaA, homeProfile, awayProfile, la, match.round);
+
+  if (!bets.length) return null;
+
+  const enriched = { ...match, lambdaH, lambdaA, bets, homeProfile, awayProfile, leagueAvg: la };
+  enriched.confidence = confidence(enriched);
+
+  if (enriched.confidence < 66) return null;
+
+  return bets.map(bet => ({
+    label: bet.label,
+    outcome: checkBet(bet.label, match.hg, match.ag)
+  }));
+}
+
+function evaluateMatches(matches, currentPlayed, previousPlayed, survival) {
+  const stats = emptyStats();
+
+  for (const match of matches.sort(byDateAsc)) {
+    const checked = evaluateMatch(match, currentPlayed, previousPlayed, survival);
+
+    if (!checked) {
+      stats.noBetMatches += 1;
+      continue;
+    }
+
+    stats.checkedMatches += 1;
+    for (const bet of checked) {
+      addStat(stats, bet.label, bet.outcome);
+    }
+  }
+
+  return stats;
 }
 
 async function analyzeLeague(league) {
   const season = seasonYear();
   const previous = season - 1;
+
   const previousRows = await loadFeed(`${league.slug}-${previous}`);
   const currentRows = await loadFeed(`${league.slug}-${season}`);
 
   const previousMatches = previousRows.map(row => normalize(row, league.name)).filter(m => m.home && m.away);
   const currentMatches = currentRows.map(row => normalize(row, league.name)).filter(m => m.home && m.away);
+
   const previousPlayed = previousMatches.filter(m => m.played);
   const currentPlayed = currentMatches.filter(m => m.played);
-  const round = latestCompletedRound(currentMatches);
-
-  const output = { league: league.name, round, matches: [], stats: emptyStats(), skipped: 0 };
-  if (round === null) return output;
-
-  const targetMatches = currentMatches.filter(m => m.round === round && m.played).sort(byDateAsc);
+  const latestRound = latestCompletedRound(currentMatches);
   const survival = survivalProfile(previousPlayed);
 
-  for (const match of targetMatches) {
-    const matchTime = match.parsedDate?.getTime() || 0;
-    const currentBefore = currentPlayed.filter(m => (m.parsedDate?.getTime() || 0) < matchTime);
-    const la = leagueAvg(currentBefore, previousPlayed);
-    const homeProfile = profile(match.home, "home", currentBefore, previousPlayed, survival, la);
-    const awayProfile = profile(match.away, "away", currentBefore, previousPlayed, survival, la);
-    const { lambdaH, lambdaA } = expectedGoals(homeProfile, awayProfile, la);
-    const bets = calculateSafePicks(lambdaH, lambdaA, homeProfile, awayProfile, la, match.round);
+  const result = {
+    league: league.name,
+    latestRound,
+    lastRound: emptyStats(),
+    season: emptyStats()
+  };
 
-    if (!bets.length) {
-      output.skipped += 1;
-      continue;
-    }
+  if (latestRound === null) return result;
 
-    const enriched = { ...match, lambdaH, lambdaA, bets, homeProfile, awayProfile, leagueAvg: la };
-    enriched.confidence = confidence(enriched);
-    if (enriched.confidence < 66) {
-      output.skipped += 1;
-      continue;
-    }
+  const lastRoundMatches = currentPlayed.filter(m => m.round === latestRound);
+  const seasonMatches = currentPlayed.filter(m => m.round !== null && m.round <= latestRound);
 
-    enriched.checked = bets.map(bet => {
-      const outcome = checkBet(bet.label, match.hg, match.ag);
-      addStat(output.stats, bet.label, outcome);
-      return { ...bet, outcome };
-    });
+  result.lastRound = evaluateMatches(lastRoundMatches, currentPlayed, previousPlayed, survival);
+  result.season = evaluateMatches(seasonMatches, currentPlayed, previousPlayed, survival);
 
-    output.matches.push(enriched);
-  }
-
-  return output;
-}
-
-function resultIcon(outcome) {
-  if (outcome === true) return "✅";
-  if (outcome === false) return "❌";
-  return "❔";
-}
-
-function buildGlobalStats(results) {
-  const global = emptyStats();
-  for (const lr of results) {
-    global.ok += lr.stats.ok;
-    global.tot += lr.stats.tot;
-    for (const [label, s] of Object.entries(lr.stats.byMarket)) {
-      if (!global.byMarket[label]) global.byMarket[label] = { ok: 0, tot: 0 };
-      global.byMarket[label].ok += s.ok;
-      global.byMarket[label].tot += s.tot;
-    }
-  }
-  return global;
-}
-
-function buildSummaryMessage(results) {
-  const global = buildGlobalStats(results);
-  let msg = "📊 REPORT PRONOSTICI GIORNATE CONCLUSE\n\n";
-  msg += `📌 Totale: ${pctLine(global.ok, global.tot)}\n\n`;
-  msg += "🏆 Riepilogo campionati\n";
-  for (const lr of results) {
-    if (lr.round === null) msg += `⚠️ ${lr.league}: nessuna giornata conclusa\n`;
-    else msg += `✅ ${lr.league} - Giornata ${lr.round}: ${pctLine(lr.stats.ok, lr.stats.tot)}\n`;
-  }
-  msg += "\n━━━━━━━━━━━━━━━\n📈 Performance per mercato\n";
-  const markets = Object.entries(global.byMarket).sort((a, b) => b[1].tot - a[1].tot);
-  for (const [label, s] of markets) msg += `${label}: ${pctLine(s.ok, s.tot)}\n`;
-  msg += "\n📌 Il report ricalcola i pronostici usando solo le partite disponibili prima di ogni match.";
-  return msg;
-}
-
-function buildLeagueReport(lr) {
-  let msg = `📊 ${lr.league}`;
-  if (lr.round !== null) msg += ` - Giornata ${lr.round}`;
-  msg += "\n\n";
-
-  if (lr.round === null) return msg + "Nessuna giornata conclusa da verificare.";
-  if (!lr.matches.length) return msg + "Nessuna partita verificabile dopo i filtri di qualità.";
-
-  msg += `📌 Totale: ${pctLine(lr.stats.ok, lr.stats.tot)}\n`;
-  if (lr.skipped) msg += `⚠️ Partite escluse/no bet: ${lr.skipped}\n`;
-  msg += "━━━━━━━━━━━━━━━\n\n";
-
-  for (const m of lr.matches.sort(byDateAsc)) {
-    msg += `⚽ ${m.home} - ${m.away} ${m.hg}-${m.ag}\n`;
-    const d = formatDateShort(m.date);
-    if (d) msg += `🗓 ${d}\n`;
-    msg += `📈 Affidabilità: ${confidenceLabel(m.confidence)}\n`;
-    for (const bet of m.checked) msg += `✅ ${bet.label} ${resultIcon(bet.outcome)}\n`;
-    msg += "\n";
-  }
-
-  msg += "━━━━━━━━━━━━━━━\n📌 Verifica automatica sui pronostici sicuri.";
-  return msg;
+  return result;
 }
 
 async function loadReport() {
   const results = [];
+
   for (const league of LEAGUES) {
     const result = await analyzeLeague(league);
     results.push(result);
     await sleep(500);
   }
+
   return results;
+}
+
+function globalStats(results, mode) {
+  const global = emptyStats();
+  for (const result of results) mergeStats(global, result[mode]);
+  return global;
+}
+
+function buildSingleReportMessage(results) {
+  const lastGlobal = globalStats(results, "lastRound");
+  const seasonGlobal = globalStats(results, "season");
+  const rounds = results
+    .filter(r => r.latestRound !== null)
+    .map(r => `${r.league} G${r.latestRound}`)
+    .join(" | ");
+
+  let msg = "📊 REPORT PRONOSTICI\n\n";
+
+  msg += "🗓 Ultime giornate concluse\n";
+  msg += `${rounds || "N/D"}\n\n`;
+
+  msg += "📌 PASSATA GIORNATA\n";
+  msg += `Totale: ${pctLine(lastGlobal.ok, lastGlobal.tot)}\n`;
+  msg += `Partite verificate: ${lastGlobal.checkedMatches} | No bet: ${lastGlobal.noBetMatches}\n\n`;
+  msg += "Per campionato\n";
+  for (const result of results) msg += `${formatLeagueLine(result, "lastRound")}\n`;
+
+  msg += "\nMercati principali\n";
+  msg += `${marketStatsLine(lastGlobal, 8)}\n`;
+
+  msg += "\n━━━━━━━━━━━━━━━\n";
+
+  msg += "📈 DA INIZIO CAMPIONATO\n";
+  msg += `Totale: ${pctLine(seasonGlobal.ok, seasonGlobal.tot)}\n`;
+  msg += `Partite verificate: ${seasonGlobal.checkedMatches} | No bet: ${seasonGlobal.noBetMatches}\n\n`;
+  msg += "Per campionato\n";
+  for (const result of results) msg += `${formatLeagueLine(result, "season")}\n`;
+
+  msg += "\nMercati principali\n";
+  msg += `${marketStatsLine(seasonGlobal, 10)}\n`;
+
+  msg += "\n📌 Report aggregato: nessuna singola partita mostrata. Il modello ricalcola i pick usando solo dati disponibili prima del match.";
+
+  if (msg.length > 3900) {
+    msg = `${msg.slice(0, 3850)}\n\nMessaggio accorciato per limite Telegram.`;
+  }
+
+  return msg;
 }
 
 async function run() {
   try {
     const results = await loadReport();
-    const totalPredictions = results.reduce((sum, r) => sum + r.stats.tot, 0);
-    if (!totalPredictions) {
-      console.log("Nessun pronostico verificabile. Nessun messaggio inviato.");
+    const lastGlobal = globalStats(results, "lastRound");
+    const seasonGlobal = globalStats(results, "season");
+
+    if (!lastGlobal.tot && !seasonGlobal.tot) {
+      console.log("Nessun pronostico aggregato verificabile. Nessun messaggio inviato.");
       return;
     }
 
-    const messages = [buildSummaryMessage(results)];
-    for (const lr of results) {
-      if (lr.round !== null && lr.matches.length) messages.push(buildLeagueReport(lr));
-    }
-
-    await sendMessagesToAll(messages);
-    console.log(`Report inviato. Pronostici verificati: ${totalPredictions}`);
+    await sendMessagesToAll([buildSingleReportMessage(results)]);
+    console.log(`Report aggregato inviato. Pronostici ultima giornata: ${lastGlobal.tot}. Pronostici stagione: ${seasonGlobal.tot}.`);
   } catch (err) {
     console.error("Errore report:", err);
     process.exitCode = 1;
