@@ -1,12 +1,15 @@
 name: Invio statistiche passate
 
 on:
-  #schedule:
-    # Mercoledì ore 08:00 italiane circa durante ora legale
-    # GitHub Actions usa UTC
-    #- cron: "0 6 * * 3"
+  schedule:
+    - cron: "0 6 * * 3"
 
   workflow_dispatch:
+    inputs:
+      TEST_MODE:
+        description: "Attiva modalità test (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   run-report:
