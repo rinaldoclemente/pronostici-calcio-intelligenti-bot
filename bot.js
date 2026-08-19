@@ -22,7 +22,7 @@ const LEAGUES = [
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 function avg(values, fallback = 0) { const valid = values.filter(Number.isFinite); return valid.length ? valid.reduce((s, v) => s + v, 0) / valid.length : fallback; }
-function safeDiv(a, b, fb = 1) { return Number.isFinite(a) && Number.isFinite(b) && b !== 0 ? a / b : fb; }
+function safeDiv(a, b, fallback = 1) { return Number.isFinite(a) && Number.isFinite(b) && b !== 0 ? a / b : fallback; }
 function pct(v) { return `${Math.round(v * 100)}%`; }
 
 function loadUsers() {
@@ -58,9 +58,9 @@ async function sendMessagesToAll(messages) {
 
 function localParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
-  const m = {};
-  for (const p of parts) m[p.type] = p.value;
-  return { year: Number(m.year), month: Number(m.month), day: Number(m.day) };
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
 }
 function seasonYear() { const { year, month } = localParts(); return month >= 8 ? year : year - 1; }
 
@@ -85,12 +85,22 @@ function formatDateShort(value) {
 
 function rawDate(row) { return row.DateUtc || row.MatchDate || row.Date || row.DateTime || row.UtcDate || null; }
 function hasScore(row) { return row.HomeTeamScore !== null && row.HomeTeamScore !== undefined && row.HomeTeamScore !== "" && row.AwayTeamScore !== null && row.AwayTeamScore !== undefined && row.AwayTeamScore !== ""; }
-function roundNumber(v) { if (v === null || v === undefined || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
+function roundNumber(value) { if (value === null || value === undefined || value === "") return null; const n = Number(value); return Number.isFinite(n) ? n : null; }
 
 function normalize(row, league) {
   const played = hasScore(row);
   const date = rawDate(row);
-  return { league, home: row.HomeTeam, away: row.AwayTeam, hg: played ? Number(row.HomeTeamScore) : null, ag: played ? Number(row.AwayTeamScore) : null, date, parsedDate: parseDate(date), round: roundNumber(row.RoundNumber), played };
+  return {
+    league,
+    home: row.HomeTeam,
+    away: row.AwayTeam,
+    hg: played ? Number(row.HomeTeamScore) : null,
+    ag: played ? Number(row.AwayTeamScore) : null,
+    date,
+    parsedDate: parseDate(date),
+    round: roundNumber(row.RoundNumber),
+    played
+  };
 }
 
 async function loadFeed(slug) {
@@ -99,7 +109,10 @@ async function loadFeed(slug) {
     if (!res.ok) { console.log(`Feed non disponibile: ${slug} - ${res.status}`); return []; }
     const json = await res.json();
     return Array.isArray(json) ? json : [];
-  } catch (err) { console.log(`Errore caricamento ${slug}:`, err.message); return []; }
+  } catch (err) {
+    console.log(`Errore caricamento ${slug}:`, err.message);
+    return [];
+  }
 }
 
 function byDateAsc(a, b) { return (a.parsedDate?.getTime() || 0) - (b.parsedDate?.getTime() || 0); }
@@ -137,9 +150,13 @@ function teamTable(matches) {
 
 function survivalProfile(previousPlayed) {
   const table = teamTable(previousPlayed).filter(t => t.p > 0).sort((a, b) => (a.pts / a.p) - (b.pts / b.p));
-  if (!table.length) return { gf: 1.0, ga: 1.65 };
+  if (!table.length) return { gf: 1.0, ga: 1.65, btts: 0.48 };
   const bottom = table.slice(0, Math.max(3, Math.ceil(table.length * 0.2)));
-  return { gf: clamp(avg(bottom.map(t => t.gf / t.p), 1.0), 0.6, 1.3), ga: clamp(avg(bottom.map(t => t.ga / t.p), 1.65), 1.3, 2.2) };
+  return {
+    gf: clamp(avg(bottom.map(t => t.gf / t.p), 1.0), 0.6, 1.3),
+    ga: clamp(avg(bottom.map(t => t.ga / t.p), 1.65), 1.3, 2.2),
+    btts: 0.48
+  };
 }
 
 function rawLeagueAvg(matches) {
@@ -159,7 +176,15 @@ function leagueAvg(currentPlayed, previousPlayed) {
   const cw = currentPlayed.length >= 20 ? 0.70 : 0.45;
   const pw = 1 - cw;
   const c = rawLeagueAvg(currentPlayed), p = rawLeagueAvg(previousPlayed);
-  return { homeGoals: clamp(c.homeGoals * cw + p.homeGoals * pw, 0.8, 2.3), awayGoals: clamp(c.awayGoals * cw + p.awayGoals * pw, 0.6, 2.0), btts: clamp(c.btts * cw + p.btts * pw, 0.25, 0.75), o15: clamp(c.o15 * cw + p.o15 * pw, 0.45, 0.90), o25: clamp(c.o25 * cw + p.o25 * pw, 0.25, 0.75), u25: clamp(c.u25 * cw + p.u25 * pw, 0.25, 0.75), u35: clamp(c.u35 * cw + p.u35 * pw, 0.45, 0.90) };
+  return {
+    homeGoals: clamp(c.homeGoals * cw + p.homeGoals * pw, 0.8, 2.3),
+    awayGoals: clamp(c.awayGoals * cw + p.awayGoals * pw, 0.6, 2.0),
+    btts: clamp(c.btts * cw + p.btts * pw, 0.25, 0.75),
+    o15: clamp(c.o15 * cw + p.o15 * pw, 0.45, 0.90),
+    o25: clamp(c.o25 * cw + p.o25 * pw, 0.25, 0.75),
+    u25: clamp(c.u25 * cw + p.u25 * pw, 0.25, 0.75),
+    u35: clamp(c.u35 * cw + p.u35 * pw, 0.45, 0.90)
+  };
 }
 
 function teamGames(team, matches) { return matches.filter(m => m.home === team || m.away === team).sort(byDateDesc); }
@@ -196,91 +221,39 @@ function trendFactors(team, games) {
 
 function weighted(parts) {
   const valid = parts.filter(p => Number.isFinite(p.value) && p.weight > 0);
-  const tw = valid.reduce((s, p) => s + p.weight, 0);
-  return tw ? valid.reduce((s, p) => s + p.value * p.weight, 0) / tw : 0;
+  const totalWeight = valid.reduce((s, p) => s + p.weight, 0);
+  return totalWeight ? valid.reduce((s, p) => s + p.value * p.weight, 0) / totalWeight : 0;
 }
 
 function formFactor(ppg) { return clamp(1 + (ppg - 1.3) * 0.07, 0.90, 1.10); }
 function reliability(games) { return clamp(games / 10, 0.35, 1); }
 
 function profile(team, venue, currentPlayed, previousPlayed, survival, la) {
-  const currentAll = teamGames(team, currentPlayed);
-  const previousAll = teamGames(team, previousPlayed);
-  const currentVenue = teamVenueGames(team, currentPlayed, venue);
-  const previousVenue = teamVenueGames(team, previousPlayed, venue);
-
+  const currentAll = teamGames(team, currentPlayed), previousAll = teamGames(team, previousPlayed), currentVenue = teamVenueGames(team, currentPlayed, venue), previousVenue = teamVenueGames(team, previousPlayed, venue);
   const r5 = summarize(valuesFor(team, currentAll.slice(0, 5)), survival.gf, survival.ga);
   const r10 = summarize(valuesFor(team, currentAll.slice(0, TEAM_FORM_N)), survival.gf, survival.ga);
   const cv = summarize(valuesFor(team, currentVenue), survival.gf, survival.ga);
   const pv = summarize(valuesFor(team, previousVenue), survival.gf, survival.ga);
   const pa = summarize(valuesFor(team, previousAll), survival.gf, survival.ga);
+  const promoted = pa.games === 0, cg = currentAll.length, previousPpg = pa.games ? pa.ppg : 0.70;
 
-  const promoted = pa.games === 0;
-  const cg = currentAll.length;
-  const previousPpg = pa.games ? pa.ppg : 0.70;
-
-  let gf;
-  let ga;
-  let ppg;
-
+  let gf, ga, ppg;
   if (promoted && cg === 0) {
-    gf = survival.gf * 0.90;
-    ga = survival.ga * 1.08;
-    ppg = 0.70;
+    gf = survival.gf * 0.90; ga = survival.ga * 1.08; ppg = 0.70;
   } else if (!promoted && cg === 0) {
-    gf = weighted([
-      { value: pv.gf, weight: 0.70 },
-      { value: pa.gf, weight: 0.25 },
-      { value: survival.gf, weight: 0.05 }
-    ]);
-    ga = weighted([
-      { value: pv.ga, weight: 0.70 },
-      { value: pa.ga, weight: 0.25 },
-      { value: survival.ga, weight: 0.05 }
-    ]);
+    gf = weighted([{ value: pv.gf, weight: 0.70 }, { value: pa.gf, weight: 0.25 }, { value: survival.gf, weight: 0.05 }]);
+    ga = weighted([{ value: pv.ga, weight: 0.70 }, { value: pa.ga, weight: 0.25 }, { value: survival.ga, weight: 0.05 }]);
     ppg = pa.ppg;
   } else if (promoted) {
-    const realWeight = clamp(cg / 10, 0.20, 0.80);
-    const fallbackWeight = 1 - realWeight;
-    gf = weighted([
-      { value: r5.gf, weight: realWeight * 0.55 },
-      { value: r10.gf, weight: realWeight * 0.25 },
-      { value: cv.gf, weight: realWeight * 0.20 },
-      { value: survival.gf * 0.90, weight: fallbackWeight }
-    ]);
-    ga = weighted([
-      { value: r5.ga, weight: realWeight * 0.55 },
-      { value: r10.ga, weight: realWeight * 0.25 },
-      { value: cv.ga, weight: realWeight * 0.20 },
-      { value: survival.ga * 1.08, weight: fallbackWeight }
-    ]);
-    ppg = weighted([
-      { value: r5.ppg, weight: realWeight * 0.70 },
-      { value: r10.ppg, weight: realWeight * 0.30 },
-      { value: 0.70, weight: fallbackWeight }
-    ]);
+    const rw = clamp(cg / 10, 0.20, 0.80), fw = 1 - rw;
+    gf = weighted([{ value: r5.gf, weight: rw * 0.55 }, { value: r10.gf, weight: rw * 0.25 }, { value: cv.gf, weight: rw * 0.20 }, { value: survival.gf * 0.90, weight: fw }]);
+    ga = weighted([{ value: r5.ga, weight: rw * 0.55 }, { value: r10.ga, weight: rw * 0.25 }, { value: cv.ga, weight: rw * 0.20 }, { value: survival.ga * 1.08, weight: fw }]);
+    ppg = weighted([{ value: r5.ppg, weight: rw * 0.70 }, { value: r10.ppg, weight: rw * 0.30 }, { value: 0.70, weight: fw }]);
   } else {
-    const currentWeight = clamp(cg / 10, 0.20, 0.65);
-    const previousWeight = 1 - currentWeight;
-    gf = weighted([
-      { value: r5.gf, weight: currentWeight * 0.45 },
-      { value: r10.gf, weight: currentWeight * 0.30 },
-      { value: cv.gf, weight: currentWeight * 0.25 },
-      { value: pv.gf, weight: previousWeight * 0.70 },
-      { value: pa.gf, weight: previousWeight * 0.30 }
-    ]);
-    ga = weighted([
-      { value: r5.ga, weight: currentWeight * 0.45 },
-      { value: r10.ga, weight: currentWeight * 0.30 },
-      { value: cv.ga, weight: currentWeight * 0.25 },
-      { value: pv.ga, weight: previousWeight * 0.70 },
-      { value: pa.ga, weight: previousWeight * 0.30 }
-    ]);
-    ppg = weighted([
-      { value: r5.ppg, weight: currentWeight * 0.60 },
-      { value: r10.ppg, weight: currentWeight * 0.40 },
-      { value: pa.ppg, weight: previousWeight }
-    ]);
+    const cw = clamp(cg / 10, 0.20, 0.65), pw = 1 - cw;
+    gf = weighted([{ value: r5.gf, weight: cw * 0.45 }, { value: r10.gf, weight: cw * 0.30 }, { value: cv.gf, weight: cw * 0.25 }, { value: pv.gf, weight: pw * 0.70 }, { value: pa.gf, weight: pw * 0.30 }]);
+    ga = weighted([{ value: r5.ga, weight: cw * 0.45 }, { value: r10.ga, weight: cw * 0.30 }, { value: cv.ga, weight: cw * 0.25 }, { value: pv.ga, weight: pw * 0.70 }, { value: pa.ga, weight: pw * 0.30 }]);
+    ppg = weighted([{ value: r5.ppg, weight: cw * 0.60 }, { value: r10.ppg, weight: cw * 0.40 }, { value: pa.ppg, weight: pw }]);
   }
 
   const trend = trendFactors(team, currentAll.slice(0, 5));
@@ -292,22 +265,7 @@ function profile(team, venue, currentPlayed, previousPlayed, survival, la) {
     u35: weighted([{ value: r10.u35, weight: cg ? 0.45 : 0 }, { value: cv.u35, weight: cg ? 0.20 : 0 }, { value: pa.u35, weight: promoted ? 0 : 0.25 }, { value: la.u35, weight: 0.10 }, { value: 0.72, weight: promoted ? 0.25 : 0 }])
   };
 
-  return {
-    team,
-    venue,
-    gf: clamp(gf, 0.30, 3.3),
-    ga: clamp(ga, 0.30, 3.4),
-    ppg: clamp(ppg, 0, 3),
-    previousPpg: clamp(previousPpg, 0, 3),
-    formFactor: formFactor(ppg),
-    attackTrend: trend.attack,
-    defenseTrend: trend.defense,
-    reliability: reliability(cg + Math.min(pa.games, 10) * 0.8),
-    currentGames: cg,
-    previousGames: pa.games,
-    rates,
-    promoted
-  };
+  return { team, venue, gf: clamp(gf, 0.30, 3.3), ga: clamp(ga, 0.30, 3.4), ppg: clamp(ppg, 0, 3), previousPpg: clamp(previousPpg, 0, 3), formFactor: formFactor(ppg), attackTrend: trend.attack, defenseTrend: trend.defense, reliability: reliability(cg + Math.min(pa.games, 10) * 0.8), currentGames: cg, previousGames: pa.games, rates, promoted };
 }
 
 function expectedGoals(home, away, la) {
@@ -319,7 +277,7 @@ function expectedGoals(home, away, la) {
 }
 
 function calculateMarkets(lambdaH, lambdaA) {
-  const labels = ["1", "X", "2", "1X", "X2", "O1.5", "O2.5", "U2.5", "U3.5", "BTTS", "1 + O1.5", "1 + O2.5", "1 + U2.5", "1 + U3.5", "2 + O1.5", "2 + O2.5", "2 + U2.5", "2 + U3.5", "1X + O1.5", "1X + O2.5", "1X + U2.5", "1X + U3.5", "X2 + O1.5", "X2 + O2.5", "X2 + U2.5", "X2 + U3.5", "BTTS + O1.5", "BTTS + O2.5"];
+  const labels = ["1", "X", "2", "1X", "X2", "O1.5", "O2.5", "U2.5", "U3.5", "BTTS", "1 + O1.5", "1 + O2.5", "1 + U2.5", "1 + U3.5", "2 + O1.5", "2 + O2.5", "2 + U2.5", "2 + U3.5", "1X + O1.5", "1X + O2.5", "1X + U2.5", "1X + U3.5", "X2 + O1.5", "X2 + O2.5", "X2 + U2.5", "X2 + U3.5"];
   const m = Object.fromEntries(labels.map(label => [label, 0]));
   for (let h = 0; h <= MAX_GOALS; h++) {
     for (let a = 0; a <= MAX_GOALS; a++) {
@@ -330,7 +288,6 @@ function calculateMarkets(lambdaH, lambdaA) {
       if (aw && o15) m["2 + O1.5"] += p; if (aw && o25) m["2 + O2.5"] += p; if (aw && u25) m["2 + U2.5"] += p; if (aw && u35) m["2 + U3.5"] += p;
       if (x1 && o15) m["1X + O1.5"] += p; if (x1 && o25) m["1X + O2.5"] += p; if (x1 && u25) m["1X + U2.5"] += p; if (x1 && u35) m["1X + U3.5"] += p;
       if (x2 && o15) m["X2 + O1.5"] += p; if (x2 && o25) m["X2 + O2.5"] += p; if (x2 && u25) m["X2 + U2.5"] += p; if (x2 && u35) m["X2 + U3.5"] += p;
-      if (btts && o15) m["BTTS + O1.5"] += p; if (btts && o25) m["BTTS + O2.5"] += p;
     }
   }
   return m;
@@ -356,8 +313,20 @@ function adjustMarket(label, probability, home, away, la) {
 function isSafeMarket(label) {
   if (label === "X" || label.startsWith("X +")) return false;
   const base = new Set(["1X", "X2", "O1.5", "U3.5", "U2.5", "O2.5", "BTTS", "1", "2"]);
-  const combos = new Set(["1X + O1.5", "1X + U3.5", "1X + U2.5", "X2 + O1.5", "X2 + U3.5", "X2 + U2.5", "1 + O1.5", "1 + U3.5", "2 + O1.5", "2 + U3.5", "BTTS + O1.5"]);
+  const combos = new Set(["1X + O1.5", "1X + U3.5", "1X + U2.5", "X2 + O1.5", "X2 + U3.5", "X2 + U2.5", "1 + O1.5", "1 + U3.5", "2 + O1.5", "2 + U3.5"]);
   return base.has(label) || combos.has(label);
+}
+
+function contextualMarketAllowed(label, home, away) {
+  const strongHomeVsPromotedAway = away.promoted && home.previousPpg >= 1.75;
+  const promotedHomeVsStrongAway = home.promoted && away.previousPpg >= 1.75;
+  if (strongHomeVsPromotedAway && (label === "X2" || label === "2" || label.startsWith("X2 +") || label.startsWith("2 +"))) return false;
+  if (promotedHomeVsStrongAway && (label === "1X" || label === "1" || label.startsWith("1X +") || label.startsWith("1 +"))) return false;
+  const homeMuchStronger = home.previousPpg - away.previousPpg >= 0.90 && !home.promoted;
+  const awayMuchStronger = away.previousPpg - home.previousPpg >= 0.90 && !away.promoted;
+  if (homeMuchStronger && (label === "X2" || label.startsWith("X2 +"))) return false;
+  if (awayMuchStronger && (label === "1X" || label.startsWith("1X +"))) return false;
+  return true;
 }
 
 function minimumSafeProbability(label, round) {
@@ -380,34 +349,19 @@ function isContradictory(a, b) {
   return false;
 }
 
-function contextualMarketAllowed(label, home, away) {
-  const strongHomeVsPromotedAway = away.promoted && home.previousPpg >= 1.75;
-  const promotedHomeVsStrongAway = home.promoted && away.previousPpg >= 1.75;
-
-  if (strongHomeVsPromotedAway && (label === "X2" || label === "2" || label.startsWith("X2 +") || label.startsWith("2 +"))) return false;
-  if (promotedHomeVsStrongAway && (label === "1X" || label === "1" || label.startsWith("1X +") || label.startsWith("1 +"))) return false;
-
-  const homeMuchStronger = home.previousPpg - away.previousPpg >= 0.90 && !home.promoted;
-  const awayMuchStronger = away.previousPpg - home.previousPpg >= 0.90 && !away.promoted;
-
-  if (homeMuchStronger && (label === "X2" || label.startsWith("X2 +"))) return false;
-  if (awayMuchStronger && (label === "1X" || label.startsWith("1X +"))) return false;
-
-  return true;
-}
-
 function calculateSafePicks(lambdaH, lambdaA, home, away, la, round) {
   const markets = calculateMarkets(lambdaH, lambdaA);
-  const safeBets = Object.entries(markets)
+  const allCandidates = Object.entries(markets)
     .map(([label, p]) => ({ label, pct: adjustMarket(label, p, home, away, la), quality: marketQuality(label) }))
     .filter(b => isSafeMarket(b.label))
     .filter(b => contextualMarketAllowed(b.label, home, away))
-    .filter(b => b.pct >= minimumSafeProbability(b.label, round))
     .filter(b => b.pct <= 0.94)
     .sort((a, b) => (b.pct * b.quality) - (a.pct * a.quality));
 
+  const aboveThreshold = allCandidates.filter(b => b.pct >= minimumSafeProbability(b.label, round));
+  const pool = aboveThreshold.length ? aboveThreshold : allCandidates;
   const result = [];
-  for (const bet of safeBets) {
+  for (const bet of pool) {
     if (result.length >= 2) break;
     const badPair = result.some(x => isContradictory(x.label, bet.label));
     const sameLabel = result.some(x => x.label === bet.label);
@@ -415,7 +369,7 @@ function calculateSafePicks(lambdaH, lambdaA, home, away, la, round) {
     if (!badPair && !sameLabel && !sameFamily) result.push({ ...bet, type: "safe" });
   }
   if (result.length < 2) {
-    for (const bet of safeBets) {
+    for (const bet of pool) {
       if (result.length >= 2) break;
       const badPair = result.some(x => isContradictory(x.label, bet.label));
       if (!badPair && !result.some(x => x.label === bet.label)) result.push({ ...bet, type: "safe" });
@@ -430,7 +384,8 @@ function confidence(match) {
   const quality = avg(match.bets.map(b => marketQuality(b.label)), 1);
   return clamp(Math.round(((p1 * 0.60 + p2 * 0.40) * 70 + rel * 20 + quality * 10)), 0, 100);
 }
-function confidenceLabel(score) { if (score >= 78) return "Alta"; if (score >= 68) return "Media"; return "Bassa"; }
+function reliabilityLevel(score) { if (score >= 84) return 5; if (score >= 76) return 4; if (score >= 68) return 3; if (score >= 58) return 2; return 1; }
+function reliabilityText(score) { return `${reliabilityLevel(score)}/5`; }
 function diversityMultiplier(bets) { return new Set(bets.map(b => marketFamily(b.label))).size >= 2 ? 1.04 : 0.96; }
 function topScore(match) { const base = (match.bets[0]?.pct || 0) * 0.65 + (match.bets[1]?.pct || 0) * 0.35; const q = avg(match.bets.map(b => marketQuality(b.label)), 1); const r = clamp(0.88 + ((match.homeProfile.reliability + match.awayProfile.reliability) / 2) * 0.18, 0.88, 1.06); return base * q * diversityMultiplier(match.bets) * r; }
 
@@ -451,13 +406,11 @@ async function loadLeagues() {
       const awayProfile = profile(match.away, "away", currentPlayed, previousPlayed, surv, la);
       const { lambdaH, lambdaA } = expectedGoals(homeProfile, awayProfile, la);
       const bets = calculateSafePicks(lambdaH, lambdaA, homeProfile, awayProfile, la, match.round);
-      if (bets.length >= 1) {
-        const enriched = { ...match, lambdaH, lambdaA, bets, homeProfile, awayProfile, leagueAvg: la };
-        enriched.confidence = confidence(enriched);
-        if (enriched.confidence < 66) continue;
-        enriched.topScore = topScore(enriched);
-        all.push(enriched);
-      }
+      const enriched = { ...match, lambdaH, lambdaA, bets, homeProfile, awayProfile, leagueAvg: la };
+      enriched.confidence = confidence(enriched);
+      enriched.level = reliabilityLevel(enriched.confidence);
+      enriched.topScore = topScore(enriched);
+      all.push(enriched);
     }
   }
   return all.sort(byDateAsc);
@@ -466,18 +419,19 @@ async function loadLeagues() {
 function pickLabel(bet) { if (!bet) return "N/D"; return SHOW_NUMBERS ? `${bet.label} (${pct(bet.pct)})` : bet.label; }
 function sortByTopScore(matches) { return [...matches].sort((a, b) => b.topScore - a.topScore); }
 
-function buildSafeTicketMessage(matches) {
-  const selected = sortByTopScore(matches).filter(m => m.bets.length >= 2).slice(0, TOP_LIMIT);
-  let msg = "✅ SCHEDINA SICURA DELLA SETTIMANA\n\n🎯 10 partite con due pronostici sicuri\n📌 Criterio: probabilità alta + affidabilità dati + anti-contraddizione\n\n";
-  selected.forEach((m, i) => {
-    const date = formatDateShort(m.date);
-    msg += `${i + 1}. ${m.home} - ${m.away}\n`;
-    if (m.round !== null || date) msg += `📅 ${m.round !== null ? `Giornata ${m.round}` : ""}${m.round !== null && date ? " - " : ""}${date}\n`;
-    msg += `➡️ ${pickLabel(m.bets[0])} | ${pickLabel(m.bets[1])}\n`;
-    msg += `📈 Affidabilità: ${confidenceLabel(m.confidence)}\n`;
-    if (SHOW_NUMBERS) msg += `📊 Score: ${m.confidence}/100 | xG: ${m.lambdaH.toFixed(2)}-${m.lambdaA.toFixed(2)}\n`;
-    msg += "\n";
-  });
+function ticketLine(m, index) {
+  const date = formatDateShort(m.date);
+  let msg = `${index}. [${m.league}] ${m.home} - ${m.away}\n`;
+  if (m.round !== null || date) msg += `📅 ${m.round !== null ? `Giornata ${m.round}` : ""}${m.round !== null && date ? " - " : ""}${date}\n`;
+  msg += `➡️ ${pickLabel(m.bets[0])}${m.bets[1] ? ` | ${pickLabel(m.bets[1])}` : ""}\n`;
+  msg += `📈 Affidabilità: ${reliabilityText(m.confidence)}\n`;
+  if (SHOW_NUMBERS) msg += `📊 Score: ${m.confidence}/100 | xG: ${m.lambdaH.toFixed(2)}-${m.lambdaA.toFixed(2)}\n`;
+  return msg;
+}
+
+function buildTicketMessage(title, matches) {
+  let msg = `${title}\n\n`;
+  matches.forEach((m, i) => { msg += `${ticketLine(m, i + 1)}\n`; });
   msg += "━━━━━━━━━━━━━━━\n⚠️ Analisi statistica automatica, non garanzia di risultato.";
   return msg;
 }
@@ -489,7 +443,7 @@ function formatMatchCompact(m) {
   if (m.round !== null) msg += ` | Giornata ${m.round}`;
   msg += `\n✅ ${pickLabel(m.bets[0])}`;
   if (m.bets[1]) msg += `\n✅ ${pickLabel(m.bets[1])}`;
-  msg += `\n📈 Affidabilità: ${confidenceLabel(m.confidence)}`;
+  msg += `\n📈 Affidabilità: ${reliabilityText(m.confidence)}`;
   if (SHOW_NUMBERS) msg += `\n📊 Score: ${m.confidence}/100 | xG: ${m.lambdaH.toFixed(2)}-${m.lambdaA.toFixed(2)}`;
   return msg;
 }
@@ -498,19 +452,24 @@ function buildLeagueMessage(league, matches) {
   const sorted = [...matches].sort(byDateAsc), round = sorted.find(m => m.round !== null)?.round;
   let msg = `📊 ${league}`;
   if (round !== undefined && round !== null) msg += ` - Giornata ${round}`;
-  msg += "\n\n✅ Solo pronostici sicuri\n━━━━━━━━━━━━━━━\n\n";
+  msg += "\n\n✅ Tutte le partite con affidabilità 1-5\n━━━━━━━━━━━━━━━\n\n";
   for (const m of sorted) msg += `${formatMatchCompact(m)}\n\n`;
-  msg += "━━━━━━━━━━━━━━━\n📌 Se manca il secondo pick, vuol dire che il modello ha trovato solo un pronostico realmente solido.";
+  msg += "━━━━━━━━━━━━━━━\n📌 Affidabilità 1/5 e 2/5 incluse come richiesto.";
   return msg;
 }
 
 function buildMessages(matches, title) {
+  const sorted = sortByTopScore(matches);
+  const firstTicket = sorted.slice(0, TOP_LIMIT);
+  const secondTicket = sorted.slice(TOP_LIMIT, TOP_LIMIT * 2);
   const messages = [];
   let intro = `🔥 ${title} 🔥\n\n`;
   if (TEST_MODE) intro += `🧪 Modalità test attiva\n👥 File utenti: ${USERS_FILE}\n\n`;
-  intro += "📌 Invio diviso in più messaggi:\n1️⃣ Schedina sicura\n2️⃣ Dettaglio per campionato\n\n";
-  intro += `Partite analizzate dopo filtro qualità: ${matches.length}`;
-  messages.push(intro, buildSafeTicketMessage(matches));
+  intro += "📌 Invio diviso in più messaggi:\n1️⃣ Schedina principale\n2️⃣ Seconda schedina\n3️⃣ Dettaglio per campionato\n\n";
+  intro += `Partite analizzate: ${matches.length}`;
+  messages.push(intro);
+  messages.push(buildTicketMessage("✅ SCHEDINA PRINCIPALE", firstTicket));
+  if (secondTicket.length) messages.push(buildTicketMessage("✅ SECONDA SCHEDINA", secondTicket));
   const byLeague = {};
   for (const match of matches) { if (!byLeague[match.league]) byLeague[match.league] = []; byLeague[match.league].push(match); }
   for (const league of Object.keys(byLeague)) messages.push(buildLeagueMessage(league, byLeague[league]));
@@ -520,7 +479,7 @@ function buildMessages(matches, title) {
 async function run() {
   try {
     const matches = await loadLeagues();
-    if (!matches.length) return console.log("Nessuna partita trovata con pronostici sicuri. Nessun messaggio inviato.");
+    if (!matches.length) return console.log("Nessuna partita trovata. Nessun messaggio inviato.");
     const title = TEST_MODE ? "TEST GIORNATE CAMPIONATI" : "WEEKEND PICKS";
     await sendMessagesToAll(buildMessages(matches, title));
     console.log(`Messaggi inviati. Partite analizzate: ${matches.length}`);
